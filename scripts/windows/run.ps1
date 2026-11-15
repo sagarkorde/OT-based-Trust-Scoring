@@ -17,7 +17,7 @@ try {
     git pull --ff-only | Out-Null           # pick up fixes pushed to GitHub
     & $Py -m pip install -q -r requirements-windows.txt 2>&1 | Where-Object { $_ -notmatch "already satisfied" } | Out-Host
     $extra = @()
-    if ($Task -eq "gates" -and $Rest) { $extra = @("--", "--only") + $Rest }
+    if ($Task -eq "gates" -and $Rest) { $extra = @("--only") + $Rest }
     & $Py tasks.py $Task --profile laptop @extra
     exit $LASTEXITCODE
 }

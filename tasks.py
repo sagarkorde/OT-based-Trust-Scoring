@@ -66,7 +66,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("task")
     ap.add_argument("--profile", default="default", choices=list(PROFILES))
-    ap.add_argument("extra", nargs="*")
+    ap.add_argument("--only", nargs="+", default=None, help="gates task: which gates to run, e.g. --only G1 G4")
     a = ap.parse_args()
     prof = PROFILES[a.profile]
     env, C = prof["env"], prof["cfg"]
@@ -86,7 +86,7 @@ def main():
         dev = "cuda"
         run(s("bench_latency.py", "--device", dev, "--out", "results/e5_overhead.csv"), env, log)
     elif t == "gates":
-        run(s("run_gates.py", "--config", f"{C}/gates.yaml", *a.extra), env, log)
+        run(s("run_gates.py", "--config", f"{C}/gates.yaml", *(["--only", *a.only] if a.only else [])), env, log)
     elif t == "gate-check":
         gated()
     elif t == "e1":
