@@ -10,11 +10,11 @@ agentdojo:
   calibration_task_frac: 0.5
   defenses: [none, spotlighting_with_delimiting, transformers_pi_detector, wts_output_block, wts_drift_confirm, wts_full]
   llms:
-    - {model: ots-llama3.1-8b-16k, base_url: "http://localhost:11434/v1"}
+    - {model: ots-llama3.1-8b-16k, ollama_base: "llama3.1:8b", num_ctx: 16384, base_url: "http://localhost:11434/v1"}
 injecagent:
   splits: [dh, ds]
   settings: [base, enhanced]
   benign_filler_source: alpaca
   llms:
-    - {model: ots-llama3.1-8b-16k, base_url: "http://localhost:11434/v1", max_tokens: 512}
+    - {model: ots-llama3.1-8b-16k, ollama_base: "llama3.1:8b", num_ctx: 16384, base_url: "http://localhost:11434/v1", max_tokens: 512}
   defenses: [none, wts_output_block]

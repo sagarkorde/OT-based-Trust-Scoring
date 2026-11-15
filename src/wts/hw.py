@@ -123,3 +123,29 @@ def ollama_unload_all(base: str = "http://localhost:11434"):
         return models
     except Exception:
         return []
+
+
+def ensure_ollama_tag(name: str, base: str, num_ctx: int, url: str = "http://localhost:11434"):
+    """Create the fixed-context Ollama tag `name` from `base` if it does not exist (pulls `base` if needed).
+    Uses Ollama's REST API, so configs alone decide which models a run needs."""
+    import json
+    import urllib.request
+
+    def post(path, body, timeout=7200):
+        req = urllib.request.Request(f"{url}{path}", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            for line in r:   # streamed status lines
+                msg = json.loads(line or b"{}")
+                if "error" in msg:
+                    raise RuntimeError(f"ollama {path}: {msg['error']}")
+    with urllib.request.urlopen(f"{url}/api/tags", timeout=10) as r:
+        have = {m["name"] for m in json.loads(r.read())["models"]}
+    if name in have or f"{name}:latest" in have:
+        return False
+    if base not in have:
+        print(f"[ollama] pulling {base} ...", flush=True)
+        post("/api/pull", {"model": base})
+    post("/api/create", {"model": name, "from": base, "parameters": {"num_ctx": num_ctx, "temperature": 0}})
+    print(f"[ollama] created {name} (from {base}, num_ctx={num_ctx})", flush=True)
+    return True

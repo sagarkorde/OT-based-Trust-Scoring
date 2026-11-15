@@ -80,6 +80,7 @@ in the JSON log (`hardware` field):
 | Scope | 3 LLMs, 5 seeds | E1 5 seeds; E2 2 LLMs x 3 seeds; E3 1 LLM x 3 seeds; E4 3 seeds, GCG 15 behaviours x lambda {0, 1} | plan Section 8 drop order (never below 3 seeds; E4 and RQ4 kept) |
 | HarmBench GCG/PAIR/AutoDAN test cases in E1 | yes | no; GCG detection measured in E4 | test-case generation needs GPU-days on large GPUs |
 
-Gates on this hardware: G1 (LLaMA-2-7B) and G4 (Mistral 7B, DirectRequest) have published comparators. AgentDojo
-and InjecAgent report no model that fits 8 GB, so G2/G3 are measured for the record and can pass only as an
-explained gap signed off by the authors, unless an API model (e.g. gpt-4o-mini with a key) is used for them.
+Gates on this hardware: G1 (PoisonedRAG, LLaMA-2-7B: 0.97, Table 1), G3 (InjecAgent, prompted Mistral-7B: 16.7 %,
+Table 3) and G4 (HarmBench DirectRequest, Mistral 7B: 46.0 %, Table 6) have published comparators that fit 8 GB.
+AgentDojo reports no such model, so G2 is measured for the record and can pass only as an explained gap signed off
+by the authors, unless an API model (e.g. gpt-4o-mini with a key) is used for it.

@@ -12,8 +12,8 @@ n_calibration_queries: 200
 n_corpus_reference: 5000
 encoder: {kind: hf_tokens, model: BAAI/bge-base-en-v1.5, device: cuda}
 llms:
-  - {model: ots-llama3.1-8b-4k, base_url: "http://localhost:11434/v1", max_tokens: 64}
-  - {model: ots-qwen2.5-7b-4k, base_url: "http://localhost:11434/v1", max_tokens: 64}
+  - {model: ots-llama3.1-8b-4k, ollama_base: "llama3.1:8b", num_ctx: 4096, base_url: "http://localhost:11434/v1", max_tokens: 64}
+  - {model: ots-qwen2.5-7b-4k, ollama_base: "qwen2.5:7b", num_ctx: 4096, base_url: "http://localhost:11434/v1", max_tokens: 64}
 attacks: [poisonedrag_blackbox, jamming_explicit, poisonedrag_n1, poisonedrag_n2, poisonedrag_n3, poisonedrag_n4]
 attack_defenses:
   poisonedrag_n1: [none, wts]

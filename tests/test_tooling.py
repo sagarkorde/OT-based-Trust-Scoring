@@ -64,3 +64,39 @@ def test_memory_guard_stops_a_run_over_the_ceiling():
             "except KeyboardInterrupt:\n    print('STOPPED')\n")
     out = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True, timeout=30).stdout
     assert "STOPPED" in out and "NOT STOPPED" not in out
+
+
+def test_ensure_ollama_tag_pulls_and_creates_against_a_fake_server():
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    sys.path.insert(0, str(REPO / "src"))
+    from wts.hw import ensure_ollama_tag
+    calls, tags = [], {"models": [{"name": "llama3.1:8b"}]}
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            body = json.dumps(tags).encode()
+            self.send_response(200); self.end_headers(); self.wfile.write(body)
+
+        def do_POST(self):
+            n = int(self.headers["Content-Length"])
+            calls.append((self.path, json.loads(self.rfile.read(n))))
+            self.send_response(200); self.end_headers(); self.wfile.write(b'{"status":"success"}\n')
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_port}"
+    assert ensure_ollama_tag("ots-a", "llama3.1:8b", 4096, url) is True       # base present: create only
+    assert [c[0] for c in calls] == ["/api/create"] and calls[0][1]["parameters"]["num_ctx"] == 4096
+    calls.clear()
+    assert ensure_ollama_tag("ots-b", "mistral:7b", 8192, url) is True        # base missing: pull then create
+    assert [c[0] for c in calls] == ["/api/pull", "/api/create"]
+    tags["models"].append({"name": "ots-c:latest"})
+    calls.clear()
+    assert ensure_ollama_tag("ots-c", "llama3.1:8b", 4096, url) is False      # already there: nothing
+    assert calls == []
+    srv.shutdown()

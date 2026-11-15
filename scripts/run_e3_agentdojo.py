@@ -139,6 +139,10 @@ def run_gt_detection(cfg, smoke=False):
 def make_llm(lc):
     import openai
     from agentdojo.agent_pipeline import LocalLLM, OpenAILLM
+    if lc.get("ollama_base"):
+        from wts.hw import ensure_ollama_tag
+        ensure_ollama_tag(lc["model"], lc["ollama_base"], lc.get("num_ctx", 16384),
+                          lc["base_url"].replace("/v1", ""))
     if lc.get("provider") == "openai":
         llm = OpenAILLM(openai.OpenAI(), lc["model"])
         llm.name = lc["model"]
