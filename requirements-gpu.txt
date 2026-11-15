@@ -1,0 +1,11 @@
+# Experiments (GPU machine). Pin exact versions with `pip freeze` before Phase 2.
+-r requirements.txt
+torch>=2.3
+transformers>=4.44
+sentence-transformers>=3.0
+datasets>=2.20
+accelerate>=0.33
+vllm>=0.6          # serves open LLMs behind an OpenAI-compatible API for AgentDojo / InjecAgent
+openai>=1.40
+beir>=2.0          # BEIR loader used by PoisonedRAG
+agentdojo==0.1.35  # matches the pinned commit
