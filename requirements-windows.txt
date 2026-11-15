@@ -1,12 +1,12 @@
 # Windows / laptop profile (installed by scripts/windows/setup.ps1 after CUDA torch).
 # vLLM is not available on Windows: open models are served by Ollama instead.
 -r requirements.txt
-transformers>=4.44
-sentence-transformers>=3.0
-datasets>=2.20
+transformers>=4.44,<5     # benchmark code (PoisonedRAG Contriever, HarmBench classifier) targets 4.x
+sentence-transformers>=3.0,<6
+datasets>=2.20,<5         # datasets 5 needs huggingface_hub>=1.31, which transformers 4.x rejects
 accelerate>=0.33
 bitsandbytes>=0.43
-huggingface_hub>=0.24
+huggingface_hub>=0.24,<1.0  # what transformers 4.x accepts; the saved login token keeps working
 openai>=1.40
 agentdojo==0.1.35
 # beir is installed separately with --no-deps (its pytrec_eval dependency needs a C compiler on Windows;
