@@ -14,8 +14,13 @@ if (-not $Py) { throw "Run setup.ps1 first." }
 $env:PYTHONUTF8 = "1"
 Push-Location $Repo
 try {
-    git pull --ff-only | Out-Null           # pick up fixes pushed to GitHub
-    & $Py -m pip install -q -r requirements-windows.txt 2>&1 | Where-Object { $_ -notmatch "already satisfied" } | Out-Host
+    # Windows PowerShell 5.1 turns anything a program writes to stderr into a fatal error when
+    # $ErrorActionPreference is "Stop" and the stream is redirected, so native tools run under
+    # "Continue" with their streams untouched, and only their exit codes are checked.
+    $ErrorActionPreference = "Continue"
+    git pull --ff-only                      # pick up fixes pushed to GitHub
+    & $Py -m pip install -q --disable-pip-version-check -r requirements-windows.txt
+    if ($LASTEXITCODE -ne 0) { Write-Host "pip install failed (exit $LASTEXITCODE)"; exit $LASTEXITCODE }
     $extra = @()
     if ($Task -eq "gates" -and $Rest) { $extra = @("--only") + $Rest }
     & $Py tasks.py $Task --profile laptop @extra
