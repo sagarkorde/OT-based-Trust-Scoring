@@ -47,8 +47,10 @@ def progress(gate, i, n, t0, every=25):
 
 
 def summary(gate, **kw):
+    """One JSON object per line: gates report different fields, which a single CSV header cannot hold."""
     row = dict(gate=gate, date=time.strftime("%Y-%m-%d %H:%M"), **kw)
-    append_rows(_out() / "summary.csv", [row])
+    with (_out() / "summary.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, default=str) + "\n")
     print(f"\n[{gate}] " + "  ".join(f"{k}={v}" for k, v in kw.items()), flush=True)
 
 

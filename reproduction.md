@@ -28,3 +28,14 @@ Append one entry per attempt: date, gate, command, commit hash, result, explanat
   ("question" + ".") to each released adversarial text (src/attack.py, get_attack, lines 91-93); our harness used
   the released texts alone, so fewer reached the top-5. Fixed in the next commit (wts.data.poisonedrag_attack_texts,
   used by G1, E2 and E4). G1 to be re-run.
+
+- 2026-11-15 23:09 · G3 · same run · Mistral-7B-Instruct-v0.2 (Ollama Q4_K_M, 8k context, temperature 0),
+  InjecAgent prompt, base setting · ASR-valid Total **22.1 %** (n valid = 655 of 1,054; 95 % CI 19.0-25.3;
+  DH 15.7 %, DS 29.3 %; valid rate 62.1 %) vs published 16.7 % (Table 3) · diff +5.4 · **outside tolerance by
+  0.4 points**. Score recomputed independently from G3.csv with InjecAgent's get_score definitions (identical).
+  Known differences: (1) the paper does not name its Mistral-7B release (repo and paper checked); (2) Q4
+  quantization vs full precision; (3) 11 DS step-2 attacker responses were simulated by the local model instead of
+  GPT-4-0613 (cache misses); 8 of those 11 succeeded, and counting all 8 as failures gives 20.9 % (inside
+  tolerance). Temperature (0) and output budget (512) match the paper. Status: **awaiting author decision**
+  (accept as explained gap, or run the sensitivity checks: Mistral-7B-Instruct-v0.1, and the 11 cases
+  re-simulated another way).
