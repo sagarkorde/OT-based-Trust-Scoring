@@ -3,7 +3,7 @@
 torch>=2.3
 transformers>=4.44,<5
 sentencepiece>=0.2           # Llama-2 tokenizers (HarmBench classifier, Llama-2 / Mistral v0.1 models)
-protobuf>=4.25,<6             # needed by transformers to convert those tokenizers
+protobuf>=4.25                # needed by transformers to convert those tokenizers
 sentence-transformers>=3.0,<6
 datasets>=2.20,<5         # datasets 5 needs huggingface_hub>=1.31, which transformers 4.x rejects
 accelerate>=0.33
