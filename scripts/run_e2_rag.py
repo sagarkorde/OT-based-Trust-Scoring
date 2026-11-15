@@ -138,8 +138,8 @@ def run(cfg):
             retrieval = D.poisonedrag_retrieval(ds, ret)
             R = Retriever(ret)
             filler = [corpus[d]["text"] for d in random.Random(10_000).sample(list(corpus), 2000)]
-            attacks = {a: {t["id"]: attack_texts(a, t, cfg, filler) for t in targets}
-                       for a in ["clean"] + cfg["attacks"]}
+            names = (["clean"] if cfg.get("include_clean", True) else []) + cfg["attacks"]
+            attacks = {a: {t["id"]: attack_texts(a, t, cfg, filler) for t in targets} for a in names}
             pools = {a: {t["id"]: build_pool(t, retrieval, corpus, R, attacks[a][t["id"]], pool_k) for t in targets}
                      for a in attacks}
             for seed in cfg["seeds"]:
@@ -160,14 +160,14 @@ def run(cfg):
                     llm = build_llm(lc)
                     with run_record("e2", dict(cfg, dataset=ds, retriever=ret, llm=lc["model"]), seed) as rec:
                         rows, chunk_rows = [], []
-                        for att in ["clean"] + cfg["attacks"]:
+                        for att in names:
                             if att not in pools:
                                 continue
                             for t in targets:
                                 pool = pools[att][t["id"]]
                                 texts = [p[0] for p in pool]
                                 is_adv = [p[1] for p in pool]
-                                for dfn in cfg["defenses"]:
+                                for dfn in cfg.get("attack_defenses", {}).get(att, cfg["defenses"]):
                                     if dfn in ("none", "paraphrase_rerank", "robustrag_keyword") and seed != cfg["seeds"][0]:
                                         continue  # deterministic (temperature 0): run once
                                     info = {}

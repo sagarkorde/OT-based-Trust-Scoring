@@ -61,11 +61,8 @@ class LlamaGuardScorer:
 
     def _load(self):
         if self._m is None:
-            import torch
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-            self._t = AutoTokenizer.from_pretrained(self.model_name)
-            self._m = AutoModelForCausalLM.from_pretrained(self.model_name, torch_dtype=torch.bfloat16,
-                                                           device_map=self.device).eval()
+            from .hw import load_causal_lm
+            self._m, self._t = load_causal_lm(self.model_name)
 
     def scores(self, texts) -> np.ndarray:
         import torch
@@ -116,11 +113,9 @@ class LastTokenProbe:
 
     def _feats(self, texts, layers):
         import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
         if self._m is None:
-            self._t = AutoTokenizer.from_pretrained(self.model_name)
-            self._m = AutoModelForCausalLM.from_pretrained(self.model_name, torch_dtype=torch.bfloat16,
-                                                           device_map=self.device).eval()
+            from .hw import load_causal_lm
+            self._m, self._t = load_causal_lm(self.model_name)
         feats = {l: [] for l in layers}
         for t in texts:
             ids = self._t(t, return_tensors="pt", truncation=True, max_length=1024).input_ids.to(self._m.device)

@@ -54,3 +54,13 @@ def test_e2_attack_variants():
     assert len(d[0].split()) == 4 + 8 and d[0].startswith("a b c d")
     assert "I don't know" in e2.attack_texts("jamming_explicit", t, cfg, filler)[0]
     assert e2.clean_str(" Paris. ") == "paris"
+
+
+def test_memory_guard_stops_a_run_over_the_ceiling():
+    import subprocess
+    code = ("import time, sys; sys.path.insert(0, 'src'); from wts.hw import MemoryGuard\n"
+            "MemoryGuard(max_gb=0.01, interval=0.1).start()\n"
+            "try:\n    time.sleep(10); print('NOT STOPPED')\n"
+            "except KeyboardInterrupt:\n    print('STOPPED')\n")
+    out = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True, timeout=30).stdout
+    assert "STOPPED" in out and "NOT STOPPED" not in out

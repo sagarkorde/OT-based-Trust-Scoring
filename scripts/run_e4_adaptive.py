@@ -142,14 +142,13 @@ def run_paraphrase(cfg, cfg_e1):
 def run_gcg(cfg, cfg_e1):
     """Minimal GCG (Zou et al. [6]) with an added W2 term. One behavior at a time, greedy coordinate steps."""
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from wts.encoders import LLMLayerEncoder
     from wts.measures_torch import ledoit_wolf_t
 
     gc = cfg["gcg"]
-    tok = AutoTokenizer.from_pretrained(gc["model"])
-    model = AutoModelForCausalLM.from_pretrained(gc["model"], torch_dtype=torch.bfloat16, device_map="cuda").eval()
+    from wts.hw import load_causal_lm
+    model, tok = load_causal_lm(gc["model"])   # 4-bit NF4 on the laptop profile
     for p in model.parameters():
         p.requires_grad_(False)
     emb = model.get_input_embeddings()
@@ -243,16 +242,22 @@ def run_gcg(cfg, cfg_e1):
 
 def _harmbench_judge(model_name):
     """HarmBench classifier (cais/HarmBench-Llama-2-13b-cls) with its released prompt (ext/HarmBench/eval_utils.py)."""
+    import os
+
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
+
+    from wts.hw import load_causal_lm
     sys.path.insert(0, str(REPO / "ext/HarmBench"))
     from eval_utils import LLAMA2_CLS_PROMPT
+    dev = os.environ.get("OT_JUDGE_DEVICE", "cuda")
+    # the classifier is never quantized: bf16 on GPU, or bf16 on CPU (laptop profile, ~26 GB RAM)
+    cls, _ = load_causal_lm(model_name, device="cpu" if dev == "cpu" else "cuda", quant="bf16")
     tok = AutoTokenizer.from_pretrained(model_name, use_fast=False, truncation_side="left", padding_side="left")
-    cls = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="cuda").eval()
 
     def judge(behavior, generation):
         inp = LLAMA2_CLS_PROMPT["prompt"].format(behavior=behavior, generation=generation)
-        ids = tok(inp, return_tensors="pt").input_ids.cuda()
+        ids = tok(inp, return_tensors="pt").input_ids.to(cls.device)
         with torch.no_grad():
             out = cls.generate(ids, max_new_tokens=1, do_sample=False)
         return tok.decode(out[0, ids.shape[1]:]).strip().lower() == "yes"
@@ -261,12 +266,13 @@ def _harmbench_judge(model_name):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["dilution", "paraphrase", "gcg", "all"], nargs="?", default="all")
+    ap.add_argument("mode", choices=["dilution", "paraphrase", "gcg", "rag", "agents", "all"], nargs="?", default="all")
     ap.add_argument("--config", default=str(REPO / "configs/e4.yaml"))
     ap.add_argument("--smoke", action="store_true")
     a = ap.parse_args()
     cfg = yaml.safe_load(open(a.config))
-    cfg_e1 = yaml.safe_load(open(REPO / "configs/e1.yaml"))
+    cdir = Path(a.config).parent                      # configs/ or configs/laptop/
+    cfg_e1 = yaml.safe_load(open(cdir / "e1.yaml"))
     if a.smoke:
         run_dilution(cfg, cfg_e1, smoke=True)
     else:
@@ -276,3 +282,14 @@ if __name__ == "__main__":
             run_paraphrase(cfg, cfg_e1)
         if a.mode in ("gcg", "all"):
             run_gcg(cfg, cfg_e1)
+        if a.mode in ("rag", "all"):        # end-to-end recovered ASR in RAG (after `paraphrase`)
+            import run_e2_rag as E2
+            c2 = yaml.safe_load(open(cdir / "e2.yaml"))
+            E2.run({**c2, "attacks": [x for x in cfg["e2_attacks"] if x != "poisonedrag_blackbox"],
+                    "defenses": ["none", "wts"], "attack_defenses": {}, "include_clean": False})
+        if a.mode in ("agents", "all"):     # minimal one-sentence injection ('direct') in AgentDojo
+            import run_e3_agentdojo as E3
+            c3 = yaml.safe_load(open(cdir / "e3.yaml"))
+            c3["agentdojo"] = {**c3["agentdojo"], "attacks": [x for x in cfg["agentdojo_attacks"] if x != "important_instructions"],
+                               "defenses": ["none", "wts_full"]}
+            E3.run_agents(c3)

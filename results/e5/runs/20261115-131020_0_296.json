@@ -1,0 +1,116 @@
+{
+  "exp": "e5",
+  "seed": 0,
+  "config": {
+    "device": "cpu",
+    "dims": "384,768",
+    "n_units": 100,
+    "tokens": 64,
+    "measures": "w2_gauss,w2_sliced,mahalanobis,cosine,mmd_rbf",
+    "seed": 0,
+    "out": "results/_smoke/e5_cpu.csv"
+  },
+  "git_commit": "469f251697e3623d775644ad2bf93752d2887385-dirty",
+  "versions": {
+    "python": "3.13.18",
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "sklearn": "1.9.1",
+    "ot": "0.9.7.post1",
+    "torch": "2.15.0+cu132",
+    "transformers": "5.23.0"
+  },
+  "hardware": {
+    "OT_QUANT": "4bit",
+    "OT_JUDGE_DEVICE": "cpu",
+    "OT_MAX_RAM_GB": "50",
+    "OT_PROFILE": "laptop"
+  },
+  "host": "vm",
+  "started": "2026-11-15T13:09:48+0000",
+  "status": "ok",
+  "rows": [
+    {
+      "device": "cpu-numpy",
+      "dim": 384,
+      "measure": "w2_gauss",
+      "n_units": 100,
+      "median_ms": 14.702,
+      "p95_ms": 18.584
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 384,
+      "measure": "w2_sliced",
+      "n_units": 100,
+      "median_ms": 1.404,
+      "p95_ms": 1.74
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 384,
+      "measure": "mahalanobis",
+      "n_units": 100,
+      "median_ms": 0.055,
+      "p95_ms": 0.122
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 384,
+      "measure": "cosine",
+      "n_units": 100,
+      "median_ms": 0.033,
+      "p95_ms": 0.055
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 384,
+      "measure": "mmd_rbf",
+      "n_units": 100,
+      "median_ms": 22.652,
+      "p95_ms": 27.411
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 768,
+      "measure": "w2_gauss",
+      "n_units": 100,
+      "median_ms": 80.443,
+      "p95_ms": 124.912
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 768,
+      "measure": "w2_sliced",
+      "n_units": 100,
+      "median_ms": 1.67,
+      "p95_ms": 2.525
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 768,
+      "measure": "mahalanobis",
+      "n_units": 100,
+      "median_ms": 0.245,
+      "p95_ms": 0.305
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 768,
+      "measure": "cosine",
+      "n_units": 100,
+      "median_ms": 0.052,
+      "p95_ms": 0.089
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 768,
+      "measure": "mmd_rbf",
+      "n_units": 100,
+      "median_ms": 36.014,
+      "p95_ms": 51.036
+    }
+  ],
+  "wall_seconds": 31.46,
+  "peak_rss_gib": 0.88
+}

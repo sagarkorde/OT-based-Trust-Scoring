@@ -5,6 +5,7 @@ transformers>=4.44
 sentence-transformers>=3.0
 datasets>=2.20
 accelerate>=0.33
+bitsandbytes>=0.43  # 4-bit NF4 on 8 GB GPUs (Windows supported)
 vllm>=0.6          # serves open LLMs behind an OpenAI-compatible API for AgentDojo / InjecAgent
 openai>=1.40
 beir>=2.0          # BEIR loader used by PoisonedRAG

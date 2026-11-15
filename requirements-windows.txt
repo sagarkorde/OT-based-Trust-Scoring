@@ -1,0 +1,13 @@
+# Windows / laptop profile (installed by scripts/windows/setup.ps1 after CUDA torch).
+# vLLM is not available on Windows: open models are served by Ollama instead.
+-r requirements.txt
+transformers>=4.44
+sentence-transformers>=3.0
+datasets>=2.20
+accelerate>=0.33
+bitsandbytes>=0.43
+huggingface_hub>=0.24
+openai>=1.40
+agentdojo==0.1.35
+# beir is installed separately with --no-deps (its pytrec_eval dependency needs a C compiler on Windows;
+# only beir.util and beir.datasets.data_loader are used)

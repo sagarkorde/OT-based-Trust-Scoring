@@ -125,12 +125,8 @@ class LLMLayerEncoder(Encoder):
 
     def _load(self):
         if self.model is None:
-            import torch
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, revision=self.revision)
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name, revision=self.revision, torch_dtype=getattr(torch, self.dtype),
-                device_map=self.device).eval()
+            from .hw import load_causal_lm  # bf16 or 4-bit NF4 depending on OT_QUANT
+            self.model, self.tokenizer = load_causal_lm(self.model_name, self.revision)
 
     def raw_many(self, texts, batch_size: int = 8):
         import torch

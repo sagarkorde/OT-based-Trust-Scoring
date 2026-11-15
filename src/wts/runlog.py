@@ -33,12 +33,19 @@ def _versions():
     return out
 
 
+_GUARD = None
+
+
 @contextmanager
 def run_record(exp: str, config: dict, seed: int, out_dir: str | Path = REPO / "results"):
     """with run_record('e1', cfg, seed) as rec: rec['extra'] = ...  -> results/<exp>/runs/<ts>_<seed>.json"""
     out = Path(out_dir) / exp / "runs"
     out.mkdir(parents=True, exist_ok=True)
-    rec = dict(exp=exp, seed=seed, config=config, git_commit=git_commit(), versions=_versions(),
+    from .hw import MemoryGuard, profile_record
+    global _GUARD
+    if _GUARD is None:
+        _GUARD = MemoryGuard().start()
+    rec = dict(exp=exp, seed=seed, config=config, git_commit=git_commit(), versions=_versions(), hardware=profile_record(),
                host=platform.node(), started=time.strftime("%Y-%m-%dT%H:%M:%S%z"), status="running")
     t0 = time.time()
     try:
@@ -49,6 +56,7 @@ def run_record(exp: str, config: dict, seed: int, out_dir: str | Path = REPO / "
         raise
     finally:
         rec["wall_seconds"] = round(time.time() - t0, 2)
+        rec["peak_rss_gib"] = round(_GUARD.peak / 2**30, 2) if _GUARD and _GUARD.peak else None
         path = out / f"{time.strftime('%Y%m%d-%H%M%S')}_{seed}_{os.getpid()}.json"
         path.write_text(json.dumps(rec, indent=2, default=str))
 

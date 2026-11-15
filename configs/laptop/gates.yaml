@@ -1,0 +1,21 @@
+# Phase 2 reproduction gates on the laptop profile (RTX 4060 8 GB, Ollama Q4 models).
+# Quantization (Ollama Q4_K_M / Q4_0 instead of fp16) is a known source of gap: record it next to each number.
+G1:   # PoisonedRAG reports LLaMA-2-7B among its LLMs -> comparable model
+  dataset: nq
+  retriever: contriever
+  top_k: 5
+  adv_per_query: 5
+  n_targets: 100
+  llm: {model: ots-llama2-7b-4k, base_url: "http://localhost:11434/v1", max_tokens: 150}
+G2:   # no 8 GB-sized model on the AgentDojo leaderboard: measured for the record, gap must be explained
+  benchmark_version: v1.2.2
+  suites: [workspace, travel, banking, slack]
+  attack: important_instructions
+  llm: {model: ots-llama3.1-8b-16k, base_url: "http://localhost:11434/v1"}
+G3:   # check the InjecAgent tables for a comparable small model before reporting
+  setting: base
+  llm: {model: ots-llama3.1-8b-16k, base_url: "http://localhost:11434/v1", max_tokens: 512}
+G4:   # HarmBench reports Mistral 7B (Instruct v0.2) with DirectRequest -> comparable model
+  llm: {model: ots-mistral-7b-v02-4k, base_url: "http://localhost:11434/v1", max_tokens: 512}
+  max_new_tokens: 512
+  judge: cais/HarmBench-Llama-2-13b-cls      # bf16 on CPU (OT_JUDGE_DEVICE=cpu), ~26 GB RAM

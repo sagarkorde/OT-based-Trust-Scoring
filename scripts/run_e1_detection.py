@@ -28,6 +28,7 @@ from wts import data as D  # noqa: E402
 from wts.cache import encode_cached  # noqa: E402
 from wts.conformal import ConformalCalibrator, coverage_study  # noqa: E402
 from wts.encoders import HashingEncoder, PCAProjector, build_encoder  # noqa: E402
+from wts.hw import free_gpu, ollama_unload_all  # noqa: E402
 from wts.measures import ReferenceModel  # noqa: E402
 from wts.runlog import append_rows, refuse_test_only, run_record  # noqa: E402
 from wts.stats import detection_metrics  # noqa: E402
@@ -82,15 +83,17 @@ def run(cfg, smoke=False):
         seeds = cfg["seeds"][:2]
     else:
         alpaca, lmsys, attacks, pca_pool = load_items(cfg)
-        encoders = []
-        for ec in cfg["encoders"]:
+        ollama_unload_all()
+
+        def _make(ec):  # built lazily, one at a time, so only one model occupies the GPU
             e = build_encoder(ec)
             refuse_test_only(e)
             if ec["kind"] == "llm_layer":
                 proj = PCAProjector(n_components=ec.get("pca_dim", 768))
                 proj.fit(e.raw_many([r["text"] for r in pca_pool]))
                 e.projector = proj
-            encoders.append(e)
+            return e
+        encoders = (_make(ec) for ec in cfg["encoders"])
         split = cfg["benign"]["split"]
         seeds = cfg["seeds"]
 
@@ -161,6 +164,7 @@ def run(cfg, smoke=False):
                                   median_ms=round(score_ms, 3), p95_ms="")])
                 rec.update(n_benign=len(alpaca), n_shift=len(lmsys), n_attack=len(attacks), families=families)
                 print(f"[e1] {enc.name} seed={seed} done: {len(det)} detection rows", flush=True)
+        free_gpu(enc)   # 8 GB GPUs hold one model at a time
 
     if not smoke:
         run_baselines(cfg, alpaca, lmsys, attacks, out)
@@ -174,17 +178,19 @@ def run_baselines(cfg, alpaca, lmsys, attacks, out):
     items = alpaca + lmsys + attacks
     texts = [r["text"] for r in items]
     cols = {}
+    ollama_unload_all()
     if "perplexity" in bc:
-        cols["ppl_mean"], cols["ppl_window"] = B.PerplexityScorer(bc["perplexity"]["model"]).scores(texts)
+        p = B.PerplexityScorer(bc["perplexity"]["model"])
+        cols["ppl_mean"], cols["ppl_window"] = p.scores(texts)
+        free_gpu(p)
     if "llama_guard" in bc:
         g = B.LlamaGuardScorer(bc["llama_guard"]["model"])
         t = time.perf_counter()
         cols["llama_guard"] = g.scores(texts)
+        free_gpu(g)
         ms = 1000 * (time.perf_counter() - t) / len(texts)
         append_rows(out.parent / "e5_overhead.csv", [dict(device="cuda", dim="", measure="judge:llama_guard_3_8b",
                                                           n_units=len(texts), median_ms=round(ms, 3), p95_ms="")])
-    if "known_answer" in bc:
-        cols["known_answer"] = B.known_answer_scores(texts, build_llm(bc["known_answer"]["llm"]))
     base = pd.DataFrame(dict(item_id=[r["id"] for r in items], label=[r["label"] for r in items],
                              family=[r["family"] for r in items], **cols))
     if "pishield_probe" in bc:
@@ -200,7 +206,10 @@ def run_baselines(cfg, alpaca, lmsys, attacks, out):
                                                    [r["text"] for r in pool[k:]], [r["label"] for r in pool[k:]])
         test_ids = {r["id"] for r in pool}
         base["pishield"] = probe.scores(texts)
+        free_gpu(probe)
         base["pishield_train_overlap"] = base.item_id.isin(test_ids)   # deepset-train rows: excluded in tables
+    if "known_answer" in bc:   # Ollama / vLLM: run last, after every in-process model has been freed
+        base["known_answer"] = B.known_answer_scores(texts, build_llm(bc["known_answer"]["llm"]))
     base.to_csv(out / "scores" / "baselines.csv.gz", index=False)
 
 

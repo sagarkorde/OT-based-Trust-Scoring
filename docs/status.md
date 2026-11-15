@@ -63,3 +63,23 @@ have meant inventing numbers, which the plan forbids.
 3. Fill the "Published" column of `reproduction.md` from the cited tables (never from memory).
 4. Serve LLMs with vLLM on ports 8000/8001/8002 (see configs); run G1–G4; log every attempt.
 5. `make gate-check`, then `make e1 e2 e3 e4 latency tables figures refs`.
+
+## Laptop profile (HP Omen: i9-13th gen, 64 GB RAM, RTX 4060 8 GB, Windows 11) — added 2026-11-15
+
+`scripts/windows/setup.ps1` installs everything; `scripts/windows/run.ps1 <task>` runs a task with
+`--profile laptop` (configs in `configs/laptop/`). Deviations from the plan's hardware, all recorded per run
+in the JSON log (`hardware` field):
+
+| Item | Plan | Laptop profile | Why |
+| --- | --- | --- | --- |
+| Open LLMs | bf16 via vLLM | Ollama Q4 (llama3.1:8b, qwen2.5:7b; llama2:7b-chat and mistral:7b-instruct-v0.2 for gates G1, G4) | 8 GB VRAM; vLLM has no Windows build |
+| Context | model default | fixed tags: 16k (agents), 4k (RAG, short prompts); flash attention + q8 KV cache | Ollama's default context silently truncates AgentDojo prompts |
+| White-box encoder, Llama Guard, probe, GCG | bf16 | 4-bit NF4 (bitsandbytes) | 8 GB VRAM |
+| HarmBench classifier (13B) | GPU bf16 | CPU bf16 (~26 GB RAM), unquantized | keeps the official judge exact |
+| RAM | — | hard ceiling 50 GB per run (MemoryGuard) | user's limit |
+| Scope | 3 LLMs, 5 seeds | E1 5 seeds; E2 2 LLMs x 3 seeds; E3 1 LLM x 3 seeds; E4 3 seeds, GCG 15 behaviours x lambda {0, 1} | plan Section 8 drop order (never below 3 seeds; E4 and RQ4 kept) |
+| HarmBench GCG/PAIR/AutoDAN test cases in E1 | yes | no; GCG detection measured in E4 | test-case generation needs GPU-days on large GPUs |
+
+Gates on this hardware: G1 (LLaMA-2-7B) and G4 (Mistral 7B, DirectRequest) have published comparators. AgentDojo
+and InjecAgent report no model that fits 8 GB, so G2/G3 are measured for the record and can pass only as an
+explained gap signed off by the authors, unless an API model (e.g. gpt-4o-mini with a key) is used for them.

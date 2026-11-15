@@ -1,0 +1,26 @@
+# E2 laptop profile: two LLMs (Mistral dropped first, per plan); 3 seeds (plan minimum); the poisoned-passage
+# count sweep (Figure 5) runs only with defenses none and wts.
+seeds: [0, 1, 2]
+alpha: 0.05
+datasets: [nq, hotpotqa, msmarco]
+retrievers: [contriever]
+top_k: 5
+pool_k: 20
+lambda: 0.5
+adv_per_query: 5
+n_calibration_queries: 200
+n_corpus_reference: 5000
+encoder: {kind: hf_tokens, model: BAAI/bge-base-en-v1.5, device: cuda}
+llms:
+  - {model: ots-llama3.1-8b-4k, base_url: "http://localhost:11434/v1", max_tokens: 64}
+  - {model: ots-qwen2.5-7b-4k, base_url: "http://localhost:11434/v1", max_tokens: 64}
+attacks: [poisonedrag_blackbox, jamming_explicit, poisonedrag_n1, poisonedrag_n2, poisonedrag_n3, poisonedrag_n4]
+attack_defenses:
+  poisonedrag_n1: [none, wts]
+  poisonedrag_n2: [none, wts]
+  poisonedrag_n3: [none, wts]
+  poisonedrag_n4: [none, wts]
+whitebox_adv_dir: null
+jamming_optimized_path: null
+defenses: [none, wts, perplexity, paraphrase_rerank, robustrag_keyword]
+robustrag: {alpha: 0.3, beta: 3.0}

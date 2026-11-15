@@ -1,0 +1,107 @@
+{
+  "exp": "e5",
+  "seed": 0,
+  "config": {
+    "device": "cpu",
+    "dims": "384,768",
+    "n_units": 200,
+    "tokens": 64,
+    "measures": "w2_gauss,w2_sliced,mahalanobis,cosine,mmd_rbf",
+    "seed": 0,
+    "out": "results/_smoke/e5_cpu.csv"
+  },
+  "git_commit": "99c0c821da822190969ec7cc9bbc338ee641b4bb",
+  "versions": {
+    "python": "3.13.18",
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "sklearn": "1.9.1",
+    "ot": "0.9.7.post1"
+  },
+  "host": "vm",
+  "started": "2026-11-15T08:43:17+0000",
+  "status": "ok",
+  "rows": [
+    {
+      "device": "cpu-numpy",
+      "dim": 384,
+      "measure": "w2_gauss",
+      "n_units": 200,
+      "median_ms": 17.468,
+      "p95_ms": 22.682
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 384,
+      "measure": "w2_sliced",
+      "n_units": 200,
+      "median_ms": 1.598,
+      "p95_ms": 2.217
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 384,
+      "measure": "mahalanobis",
+      "n_units": 200,
+      "median_ms": 0.094,
+      "p95_ms": 0.144
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 384,
+      "measure": "cosine",
+      "n_units": 200,
+      "median_ms": 0.034,
+      "p95_ms": 0.07
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 384,
+      "measure": "mmd_rbf",
+      "n_units": 200,
+      "median_ms": 26.346,
+      "p95_ms": 33.912
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 768,
+      "measure": "w2_gauss",
+      "n_units": 200,
+      "median_ms": 95.277,
+      "p95_ms": 116.014
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 768,
+      "measure": "w2_sliced",
+      "n_units": 200,
+      "median_ms": 1.689,
+      "p95_ms": 2.461
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 768,
+      "measure": "mahalanobis",
+      "n_units": 200,
+      "median_ms": 0.307,
+      "p95_ms": 0.412
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 768,
+      "measure": "cosine",
+      "n_units": 200,
+      "median_ms": 0.062,
+      "p95_ms": 0.135
+    },
+    {
+      "device": "cpu-numpy",
+      "dim": 768,
+      "measure": "mmd_rbf",
+      "n_units": 200,
+      "median_ms": 41.847,
+      "p95_ms": 55.063
+    }
+  ],
+  "wall_seconds": 42.46
+}

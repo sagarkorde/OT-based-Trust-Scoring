@@ -1,0 +1,20 @@
+# E3 laptop profile: one open LLM (Llama 3.1 8B, Ollama Q4, 16k context), 3 seeds, one attack in E3
+# ('direct' minimal injection runs in E4). The WTS encoder runs on CPU so the GPU holds the LLM.
+seeds: [0, 1, 2]
+alpha: 0.05
+encoder: {kind: hf_tokens, model: BAAI/bge-base-en-v1.5, device: cpu}
+agentdojo:
+  benchmark_version: v1.2.2
+  suites: [workspace, travel, banking, slack]
+  attacks: [important_instructions]
+  calibration_task_frac: 0.5
+  defenses: [none, spotlighting_with_delimiting, transformers_pi_detector, wts_output_block, wts_drift_confirm, wts_full]
+  llms:
+    - {model: ots-llama3.1-8b-16k, base_url: "http://localhost:11434/v1"}
+injecagent:
+  splits: [dh, ds]
+  settings: [base, enhanced]
+  benign_filler_source: alpaca
+  llms:
+    - {model: ots-llama3.1-8b-16k, base_url: "http://localhost:11434/v1", max_tokens: 512}
+  defenses: [none, wts_output_block]

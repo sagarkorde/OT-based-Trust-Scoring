@@ -1,0 +1,33 @@
+# E1 laptop profile. Same protocol as configs/e1.yaml; scope changes (plan Section 8 drop order + 8 GB GPU):
+#  - HarmBench GCG/PAIR/AutoDAN test cases are not generated (needs >24 GB GPU-days). WTS detection of GCG
+#    prompts is measured in E4 instead (results/e4/gcg_wts.csv: score and flag per optimized prompt).
+#  - LLM-layer encoder and LLM baselines run in 4-bit NF4 (OT_QUANT=4bit); recorded in every run log.
+seeds: [0, 1, 2, 3, 4]
+alpha: 0.05
+measures: [w2_gauss, w2_location, w2_shape, w2_sliced, cosine, euclidean, mahalanobis, mmd_rbf,
+           w2_gauss_adj, w2_sliced_adj, cosine_adj, euclidean_adj, mahalanobis_adj, mmd_rbf_adj]
+benign:
+  alpaca_n: 2000
+  split: {ref: 500, cal: 1000, test: 500}
+  pca_fit_n: 1000
+  lmsys_n: 2000
+  revisions: {alpaca: null, lmsys: null}
+attacks:
+  deepset: true
+  in_the_wild_n: 1000
+  harmbench_direct: true
+  harmbench_test_cases: {}
+  revisions: {deepset: null, in_the_wild: null}
+encoders:
+  - {kind: hf_tokens, model: BAAI/bge-base-en-v1.5, device: cuda}
+  - {kind: hf_tokens, model: sentence-transformers/all-MiniLM-L6-v2, device: cuda}
+  - {kind: llm_layer, model: meta-llama/Llama-3.1-8B-Instruct, layer: 16, pca_dim: 768}
+baselines:
+  perplexity: {model: gpt2}
+  llama_guard: {model: meta-llama/Llama-Guard-3-8B}
+  pishield_probe: {model: meta-llama/Llama-3.1-8B-Instruct, train_n: 1000}
+  known_answer: {llm: {model: ots-llama3.1-8b-4k, base_url: "http://localhost:11434/v1"}}
+calibration_study:
+  alphas: [0.01, 0.05, 0.10]
+  n_cals: [50, 100, 200, 500, 1000]
+  n_repeats: 200
