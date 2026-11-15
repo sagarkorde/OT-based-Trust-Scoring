@@ -52,11 +52,12 @@ e2: gate-check
 	$(PY) scripts/run_e2_rag.py --config configs/e2.yaml
 
 e3: gate-check
+	$(PY) scripts/run_e3_agentdojo.py --config configs/e3.yaml --gt-detection
 	$(PY) scripts/run_e3_agentdojo.py --config configs/e3.yaml
 	$(PY) scripts/run_e3_injecagent.py --config configs/e3.yaml
 
 e4: gate-check
-	$(PY) scripts/run_e4_adaptive.py --config configs/e4.yaml
+	$(PY) scripts/run_e4_adaptive.py all --config configs/e4.yaml
 
 tables:
 	$(PY) scripts/make_tables.py --results results --out paper/tables

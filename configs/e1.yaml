@@ -1,7 +1,9 @@
 # E1: GenAI prompt-channel detection (RQ1, RQ4, part of RQ6)
 seeds: [0, 1, 2, 3, 4]
 alpha: 0.05
-measures: [w2_gauss, w2_location, w2_shape, w2_sliced, cosine, euclidean, mahalanobis, mmd_rbf]
+measures: [w2_gauss, w2_location, w2_shape, w2_sliced, cosine, euclidean, mahalanobis, mmd_rbf,
+           w2_gauss_adj, w2_sliced_adj, cosine_adj, euclidean_adj, mahalanobis_adj, mmd_rbf_adj]
+# *_adj = length-adjusted (hypotheses.md addendum A1); guards decide on w2_gauss_adj
 
 benign:
   alpaca_n: 2000          # per seed split: ref 500 / cal pool 1000 / test 500 (cal pool allows n_cal up to 1000)

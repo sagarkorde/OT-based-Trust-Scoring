@@ -79,24 +79,30 @@ def run_gt_detection(cfg, smoke=False):
     if not smoke:
         refuse_test_only(enc)
     seeds = cfg["seeds"][:1] if smoke else cfg["seeds"]
-    suites = ac["suites"][:2] if smoke else ac["suites"]
+    suites = ac["suites"]
     attacks = ac["attacks"][:1] if smoke else ac["attacks"]
     for seed in seeds:
         with run_record("_smoke/e3" if smoke else "e3", dict(cfg, mode="gt_detection", encoder=enc.name), seed,
                         REPO / "results") as rec:
             rows, det = [], []
+            # one guard calibrated on benign outputs pooled over all suites' calibration tasks: a single suite
+            # yields too few outputs to certify alpha/2 (conformal needs n_cal >= 39)
+            benign, splits = defaultdict(list), {}
             for sname in suites:
                 suite = get_suite(ac["benchmark_version"], sname)
                 cal_ids, test_ids = split_tasks(suite, ac["calibration_task_frac"], seed)
-                benign = defaultdict(list)
+                splits[sname] = (suite, test_ids)
                 for uid in cal_ids:
                     for tool, text in gt_tool_outputs(suite, suite.user_tasks[uid], {}):
                         benign[tool].append(enc.encode(text))
-                guard = AgentGuard(alpha=cfg["alpha"], min_tool_ref_units=5, ref_kwargs=dict(seed=seed))
-                guard.fit_outputs(dict(benign), seed=seed)
+            guard = AgentGuard(alpha=cfg["alpha"], min_tool_ref_units=5, ref_kwargs=dict(seed=seed))
+            guard.fit_outputs(dict(benign), seed=seed)
+            rec.update(n_benign_outputs=sum(len(v) for v in benign.values()), pooled_can_flag=guard.pooled_can_flag,
+                       per_tool_models=sorted(k for k in guard.tool_refs if k != "__all__"))
 
-                class _Named:  # attacks read the target model name from pipeline.name
-                    name = "local"
+            class _Named:  # attacks read the target model name from pipeline.name
+                name = "local"
+            for sname, (suite, test_ids) in splits.items():
                 for aname in attacks:
                     attack = load_attack(aname, suite, _Named())
                     for uid in test_ids:
@@ -156,20 +162,23 @@ def run_agents(cfg):
     bv = ac["benchmark_version"]
     for lc in ac["llms"]:
         for seed in cfg["seeds"]:
+            llm = make_llm(lc)
+            # 1) calibration: benign runs on every suite's calibration tasks, pooled into one guard
+            recd = Recorder()
+            p_cal = build_pipeline(llm, f"{llm.name}-calib", extra_after_tools=[recd], extra_after_llm=[recd])
+            splits = {}
             for sname in ac["suites"]:
                 suite = get_suite(bv, sname)
                 cal_ids, test_ids = split_tasks(suite, ac["calibration_task_frac"], seed)
-                with run_record("e3", dict(cfg, mode="agents", llm=lc["model"], suite=sname), seed) as rec:
-                    llm = make_llm(lc)
-                    # 1) calibration: benign runs on calibration tasks, recording outputs and plan pairs
-                    recd = Recorder()
-                    p_cal = build_pipeline(llm, f"{llm.name}-calib", extra_after_tools=[recd], extra_after_llm=[recd])
-                    benchmark_suite_without_injections(p_cal, suite, None, True, user_tasks=cal_ids, benchmark_version=bv)
-                    outputs = {t: [enc.encode(x) for x in v] for t, v in recd.outputs.items()}
-                    guard = AgentGuard(alpha=cfg["alpha"], min_tool_ref_units=10, ref_kwargs=dict(seed=seed))
-                    guard.fit_outputs(outputs, seed=seed)
-                    guard.fit_drift([guard.drift(enc.encode(a), enc.encode(b)) for a, b in recd.plan_pairs])
+                splits[sname] = (suite, test_ids)
+                benchmark_suite_without_injections(p_cal, suite, None, True, user_tasks=cal_ids, benchmark_version=bv)
+            outputs = {t: [enc.encode(x) for x in v] for t, v in recd.outputs.items()}
+            guard = AgentGuard(alpha=cfg["alpha"], min_tool_ref_units=10, ref_kwargs=dict(seed=seed))
+            guard.fit_outputs(outputs, seed=seed)
+            guard.fit_drift([(enc.encode(a), enc.encode(b)) for a, b in recd.plan_pairs], seed=seed)
 
+            for sname, (suite, test_ids) in splits.items():
+                with run_record("e3", dict(cfg, mode="agents", llm=lc["model"], suite=sname), seed) as rec:
                     rows = []
                     for dfn in ac["defenses"]:
                         olog, dlog = [], []
@@ -206,7 +215,7 @@ def run_agents(cfg):
                             pd.DataFrame(dlog).to_csv(out / "agentdojo_guard_log" / f"drift_{tag}.csv.gz", index=False)
                     append_rows(out / "agentdojo_items.csv", rows)
                     rec.update(n_rows=len(rows), n_cal_outputs=sum(len(v) for v in outputs.values()),
-                               n_plan_pairs=len(recd.plan_pairs))
+                               n_plan_pairs=len(recd.plan_pairs), pooled_can_flag=guard.pooled_can_flag)
 
 
 if __name__ == "__main__":

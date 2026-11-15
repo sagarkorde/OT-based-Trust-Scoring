@@ -42,8 +42,7 @@ def test_agent_guard_bonferroni_and_drift():
     ag = AgentGuard(alpha=0.05, min_tool_ref_units=5, ref_kwargs=dict(n_proj=8))
     ag.fit_outputs({"search": clouds(rng, 120), "rare_tool": clouds(rng, 3)})
     assert "search" in ag.tool_refs and "rare_tool" not in ag.tool_refs and "__all__" in ag.tool_refs
-    benign_drifts = [ag.drift(a, b) for a, b in zip(clouds(rng, 300), clouds(rng, 300))]
-    ag.fit_drift(benign_drifts)
+    ag.fit_drift(list(zip(clouds(rng, 300), clouds(rng, 300))))
     # benign step: rarely flagged; hijacked step (output and plan both move): flagged
     fl = [ag.decide("search", X, P, Q).flag for X, P, Q in zip(clouds(rng, 300), clouds(rng, 300), clouds(rng, 300))]
     assert np.mean(fl) <= 0.05 + 0.03

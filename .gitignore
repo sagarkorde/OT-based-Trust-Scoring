@@ -6,3 +6,10 @@ data/raw/
 data/cache/
 results/**/*.npy
 *.egg-info/
+ext
+results/_smoke/
+paper/*.aux
+paper/*.log
+paper/*.bbl
+paper/*.blg
+paper/*.out

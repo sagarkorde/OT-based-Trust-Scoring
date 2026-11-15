@@ -18,7 +18,8 @@ llms:
   - {model: mistralai/Mistral-7B-Instruct-v0.3, base_url: "http://localhost:8002/v1", max_tokens: 64}
   # - {model: gpt-4o-mini, base_url: null, max_tokens: 64}
 
-attacks: [poisonedrag_blackbox, jamming_explicit]
+attacks: [poisonedrag_blackbox, jamming_explicit, poisonedrag_n1, poisonedrag_n2, poisonedrag_n3, poisonedrag_n4]
+# poisonedrag_n<k>: first k of the 5 released passages (Figure 5); poisonedrag_blackbox = n5
 # poisonedrag_whitebox (HotFlip): generate with ext/PoisonedRAG/run.py --attack_method hotflip, then point here:
 whitebox_adv_dir: null
 # jamming optimized blockers (Shafran et al.): generate with the authors' code and point to a JSON {query_id: [text]}

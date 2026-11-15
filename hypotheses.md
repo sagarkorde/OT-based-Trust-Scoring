@@ -49,3 +49,32 @@ These pin down terms in the table so that the criteria cannot drift later.
 
 ---
 ADDENDA (dated; appended only)
+
+### A1 — 2026-11-15 — length adjustment of all scores (made before any real benchmark data was scored)
+
+What happened. While smoke-testing the pipelines with a test-only hashing encoder (no real encoder, no
+real results), injected AgentDojo tool outputs scored *lower* than clean ones. A controlled check
+(tests/test_length.py) showed why: with content held fixed, every distance in the study — Gaussian W_2,
+sliced W_2, Mahalanobis, cosine — decreases with the number of tokens in the unit (finite-sample bias of an
+n-token empirical measure). Text units differ in length by an order of magnitude, so raw scores partly
+measure length: long injected tool outputs look benign, and short adversarial passages (PoisonedRAG) would
+look malicious for the wrong reason.
+
+Change. Every score s is also computed in a length-adjusted form s_adj = s / b(n), where log b(n) is a
+linear function of log n (two lengths for intent drift) fitted on benign data that is disjoint from the
+conformal calibration data (a dev split of the reference units; half of the benign pools / plan pairs for
+the chunk and drift guards). Proposition 1 is unaffected because b is fixed before calibration.
+
+Reporting. The original raw-score hypotheses stay as written and are reported. Each of H1-H5 is reported
+twice: on raw scores (the original pre-registration) and on length-adjusted scores (this addendum),
+labelled as such. The guards make decisions with length-adjusted scores, so H2, H3 and H5 end-to-end
+numbers use the adjusted guard; a raw-score guard run is reported alongside where compute allows.
+Baselines receive the identical adjustment (cosine_adj, mahalanobis_adj, ...), so H1 compares like with like.
+
+### A2 — 2026-11-15 — AgentDojo calibration pooled across suites (made before any real data)
+
+The calibration tasks of one AgentDojo suite yield about 25 benign calibration outputs after the
+reference/calibration split, below the 39 needed for a finite conformal threshold at alpha/2 = 0.025, so a
+per-suite guard could never flag. Calibration therefore pools benign outputs from the calibration tasks of
+all four suites (tool names are suite-specific, so per-tool models are unchanged). The test tasks of every
+suite remain disjoint from all calibration tasks.

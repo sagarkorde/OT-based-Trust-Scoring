@@ -96,8 +96,7 @@ class WTSIntentDriftGuard(BasePipelineElement):
         if len(steps) < 2 or messages[-1]["role"] != "assistant" or not messages[-1].get("tool_calls"):
             return query, runtime, env, messages, extra_args
         prev, now = plan_text(steps[-2]), plan_text(steps[-1])
-        d = self.guard.drift(self.encoder.encode(prev), self.encoder.encode(now))
-        p = float(self.guard.drift_cal.pvalue(d))
+        d, p = self.guard.drift_pvalue(self.encoder.encode(prev), self.encoder.encode(now))
         flag = p <= self.guard.alpha / self.n_tests
         self.log.append(dict(drift=d, p=p, flag=flag, plan=now))
         if flag:

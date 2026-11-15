@@ -1,0 +1,29 @@
+# E4: adaptive attacks (RQ5). Mandatory: never dropped for compute (plan Section 8).
+seeds: [0, 1, 2, 3, 4]
+encoder: {kind: hf_tokens, model: BAAI/bge-base-en-v1.5}
+
+dilution:
+  factors: [0.25, 0.5, 1, 2, 4, 8]
+  max_items: 1500            # random subset of E1 attacks + all InjecAgent instructions, per seed
+
+paraphrase:
+  llm: {model: meta-llama/Llama-3.1-8B-Instruct, base_url: "http://localhost:8000/v1", max_tokens: 512}
+  n_prompts: 500
+  rag_datasets: [nq, hotpotqa, msmarco]
+
+gcg:                          # white-box A3 on open models; judge = HarmBench classifier
+  model: meta-llama/Llama-3.1-8B-Instruct
+  layer: 16
+  lambdas: [0.0, 0.5, 2.0]   # 0.0 = plain GCG (defense-unaware baseline)
+  n_behaviors: 50
+  n_seeds: 1
+  suffix_len: 20
+  steps: 250
+  topk: 256
+  batch: 128
+  early_stop_ce: 0.05
+  judge: cais/HarmBench-Llama-2-13b-cls
+
+# End-to-end recovered ASR (run through E2 / E3 with these attack names):
+e2_attacks: [poisonedrag_blackbox, poisonedrag_dilute_1x, poisonedrag_dilute_2x, poisonedrag_dilute_4x, poisonedrag_paraphrase]
+agentdojo_attacks: [important_instructions, direct]   # 'direct' = minimal one-sentence injection

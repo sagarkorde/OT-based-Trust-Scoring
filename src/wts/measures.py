@@ -170,12 +170,31 @@ class ReferenceModel:
     mmd_gamma: float | None = None
     n_units: int = 0
     n_tokens: int = 0
+    # length adjustment (addendum A1): fitted on a dev split of the reference units
+    length_adjust: bool = True
+    dev_frac: float = 0.25
+    adjusters: dict = field(default_factory=dict, repr=False)
 
     def fit(self, units: list[np.ndarray]) -> "ReferenceModel":
+        units = [np.asarray(u, dtype=np.float64) for u in units if len(u) > 0]
         if len(units) < 2:
             raise ValueError("need at least 2 reference units")
+        if not self.length_adjust or len(units) < 8:
+            self.adjusters = {}
+            return self._fit_stats(units)
+        rng = np.random.default_rng(self.seed + 7919)
+        idx = rng.permutation(len(units))
+        k = max(4, int(round(self.dev_frac * len(units))))
+        dev, fit_units = [units[i] for i in idx[:k]], [units[i] for i in idx[k:]]
+        self._fit_stats(fit_units)
+        raw = [self.score_all(X, MEASURES) for X in dev]
+        n = [len(X) for X in dev]
+        from .length import LengthAdjuster
+        self.adjusters = {m: LengthAdjuster(signed=(m == "mmd_rbf")).fit(n, [r[m] for r in raw]) for m in MEASURES}
+        return self
+
+    def _fit_stats(self, units: list[np.ndarray]) -> "ReferenceModel":
         rng = np.random.default_rng(self.seed)
-        units = [np.asarray(u, dtype=np.float64) for u in units if len(u) > 0]
         pool = np.concatenate(units, axis=0)
         if len(pool) > self.max_ref_tokens:
             pool = pool[rng.choice(len(pool), self.max_ref_tokens, replace=False)]
@@ -228,9 +247,19 @@ class ReferenceModel:
         return self.score_all(X, (measure,))[measure]
 
     def score_all(self, X: np.ndarray, measures=MEASURES) -> dict[str, float]:
-        """All requested measures for one unit. Larger = less like the benign reference."""
+        """All requested measures for one unit. Larger = less like the benign reference.
+        '<measure>_adj' gives the length-adjusted score (requires a fitted adjuster)."""
         self._check()
         X = np.asarray(X, dtype=np.float64)
+        adj = [m for m in measures if m.endswith("_adj")]
+        if adj:
+            base = tuple(dict.fromkeys([m[:-4] if m.endswith("_adj") else m for m in measures]))
+            out = self.score_all(X, base)
+            if not self.adjusters:
+                raise RuntimeError("length-adjusted measure requested but the reference has no adjusters")
+            for m in adj:
+                out[m] = self.adjusters[m[:-4]].adjust(out[m[:-4]], [len(X)])
+            return {k: out[k] for k in list(measures) + [k for k in ("loc_sq", "shape_sq") if k in out]}
         out: dict[str, float] = {}
         if any(k.startswith("w2_") and k != "w2_sliced" for k in measures):
             w2, loc, shape = self.gaussian_terms(X)
