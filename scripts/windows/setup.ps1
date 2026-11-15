@@ -77,7 +77,12 @@ try {
     # ---------------------------------------------------------------- 4. python environment
     $envList = & $conda env list
     if (-not ($envList -match "^\s*$EnvName\s")) { & $conda create -y -n $EnvName python=3.11 }
-    $Py = ((& $conda run -n $EnvName python -c "import sys; print(sys.executable)") | Select-Object -Last 1).Trim()
+    # locate the env from conda's JSON listing (`conda run` may print nothing on Windows)
+    $envDir = ((& $conda env list --json) | Out-String | ConvertFrom-Json).envs |
+              Where-Object { (Split-Path $_ -Leaf) -eq $EnvName } | Select-Object -First 1
+    $Py = if ($envDir) { Join-Path $envDir "python.exe" } else { $null }
+    if (-not $Py -or -not (Test-Path $Py)) { throw "python.exe for env '$EnvName' not found (envs: $((& $conda env list) -join '; '))" }
+    Write-Host "Python: $Py"
     & $Py -m pip install --upgrade pip
     & $Py -m pip install torch --index-url https://download.pytorch.org/whl/cu124
     & $Py -m pip install -r (Join-Path $Repo "requirements-windows.txt")
