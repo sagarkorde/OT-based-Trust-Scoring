@@ -10,3 +10,4 @@ vllm>=0.6          # serves open LLMs behind an OpenAI-compatible API for AgentD
 openai>=1.40
 beir>=2.0          # BEIR loader used by PoisonedRAG
 agentdojo==0.1.35  # matches the pinned commit
+nltk>=3.8          # InjecAgent's evaluator (n-gram repetition check)

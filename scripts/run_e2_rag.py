@@ -21,6 +21,7 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(REPO / "scripts"))
 from wts import data as D  # noqa: E402
 from wts.baselines import PerplexityScorer  # noqa: E402
 from wts.cache import encode_cached  # noqa: E402
@@ -89,8 +90,9 @@ class Retriever:
 
     def __init__(self, code, device="cuda"):
         import torch
-        sys.path.insert(0, str(PRAG))
-        from src.utils import load_models  # PoisonedRAG
+        from run_e3_injecagent import only_benchmark_on_path
+        with only_benchmark_on_path(PRAG):   # InjecAgent also names its package `src`
+            from src.utils import load_models  # PoisonedRAG
         self.torch = torch
         self.model, self.c_model, self.tok, self.get_emb = load_models(code)
         self.model.eval().to(device); self.c_model.eval().to(device)

@@ -33,15 +33,67 @@ IA = REPO / "ext/InjecAgent"
 REDACTED = "<Data omitted because a prompt injection was detected>"
 
 
+def purge_src_modules():
+    """PoisonedRAG and InjecAgent both name their code package `src`: drop any cached `src.*` modules so the
+    next import resolves against the benchmark whose path is first on sys.path."""
+    for k in [k for k in sys.modules if k == "src" or k.startswith("src.")]:
+        del sys.modules[k]
+
+
+@contextmanager
+def only_benchmark_on_path(root: Path):
+    """Import a benchmark's `src` package with no other benchmark's `src` reachable (PoisonedRAG ships
+    src/prompts.py, InjecAgent src/prompts/: whichever is on sys.path first would shadow the other)."""
+    saved = list(sys.path)
+    sys.path[:] = [str(root)] + [p for p in saved if p != str(root) and not (Path(p or ".") / "src").is_dir()]
+    purge_src_modules()
+    try:
+        yield
+    finally:
+        sys.path[:] = saved
+
+
 @contextmanager
 def in_injecagent():
     old = os.getcwd()
     os.chdir(IA)
-    sys.path.insert(0, str(IA))
+    guard = only_benchmark_on_path(IA)
+    guard.__enter__()
+    # src/utils.py builds an OpenAI client at import time and fails without a key. That client is used only
+    # for GPT-4 simulation of uncached attacker responses, which we replace (simulated_attacker_response).
+    os.environ.setdefault("OPENAI_API_KEY", "unused-placeholder")
     try:
         yield
     finally:
         os.chdir(old)
+        guard.__exit__(None, None, None)
+        purge_src_modules()
+
+
+_SIM = {}
+
+
+def simulated_attacker_response(tool, params, tool_dict, sim_llm):
+    """InjecAgent DS step 2: the attacker tool's response. Cached responses (released with the benchmark) are
+    used as is; for a cache miss the benchmark calls GPT-4-0613, which we replace with the local model given the
+    same system message and prompt. Returns (response, 'cache' | 'local:<model>'). Cache misses are logged so
+    the paper can report how many DS cases used a local simulation."""
+    from src.prompts.generation_prompts import DS_ATTACKER_TOOL_RESPONSE_GEN_MESSAGE, EXAMPLE, SYSTEM_MESSAGE
+    from src.utils import extract_content
+    if "cache" not in _SIM:
+        _SIM["cache"] = json.loads((IA / "data/attacker_simulated_responses.json").read_text(encoding="utf-8"))
+    key = f"({tool},{params})"
+    if key in _SIM["cache"]:
+        return _SIM["cache"][key], "cache"
+    prompt = DS_ATTACKER_TOOL_RESPONSE_GEN_MESSAGE.format(example=EXAMPLE, attacker_tool=json.dumps(tool_dict[tool], indent=True),
+                                                          tool_parameters=params)
+    msg = sim_llm.chat([{"role": "system", "content": SYSTEM_MESSAGE}, {"role": "user", "content": prompt}], max_tokens=512)
+    found = extract_content(msg)
+    out = (found[0] if found else msg).strip()
+    if out.startswith("json"):
+        out = out[4:].strip()
+    _SIM["cache"][key] = out          # in-memory only: the benchmark's file is never modified
+    return out, f"local:{sim_llm.model}"
 
 
 def fillers(smoke: bool, n: int, seed: int):
@@ -111,7 +163,7 @@ def run_agents(cfg, cases, guard, enc, seed, setting, out):
     with in_injecagent():
         from src.output_parsing import evaluate_output_prompted
         from src.prompts.agent_prompts import PROMPT_DICT
-        from src.utils import get_simulated_attacker_tool_response, get_tool_dict
+        from src.utils import get_tool_dict
         tool_dict = get_tool_dict()
         sys_p, user_p = PROMPT_DICT["InjecAgent"]
         for lc in ic["llms"]:
@@ -121,7 +173,7 @@ def run_agents(cfg, cases, guard, enc, seed, setting, out):
                 for split, cs in cases.items():
                     for i, c in enumerate(cs):
                         item = dict(c)
-                        flagged = False
+                        flagged, sim_src = False, ""
                         if dfn == "wts_output_block":
                             _, p = guard.output_pvalue(c["User Tool"], enc.encode(c["Tool Response"]))
                             flagged = p <= cfg["alpha"]
@@ -134,13 +186,14 @@ def run_agents(cfg, cases, guard, enc, seed, setting, out):
                         if split == "ds" and res == "succ":
                             item["Attacker Tool Parameters"] = ev["Attacker Tool Parameters"]
                             item["Attacker Tool Thought"] = ev["Attacker Tool Thought"]
-                            item["Attacker Tool Response"] = get_simulated_attacker_tool_response(
-                                item["Attacker Tools"][0], item["Attacker Tool Parameters"], tool_dict)
+                            item["Attacker Tool Response"], sim_src = simulated_attacker_response(
+                                item["Attacker Tools"][0], item["Attacker Tool Parameters"], tool_dict, llm)
                             out2 = _predict(sys_p, user_p, item, tool_dict, llm, step_2=True)
                             res = evaluate_output_prompted(out2, item["Attacker Tools"][1], item["Attacker Tools"],
                                                            item["User Tool"], item["Attacker Instruction"])["eval"]
                         rows.append(dict(llm=lc["model"], seed=seed, setting=setting, defense=dfn, split=split,
-                                         case=i, flagged=flagged, eval=res))
+                                         case=i, flagged=flagged, eval=res,
+                                         sim_response=sim_src if split == "ds" and ev["eval"] == "succ" else ""))
                 append_rows(out / "injecagent_items.csv", rows)
 
 

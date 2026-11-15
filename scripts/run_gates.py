@@ -32,9 +32,14 @@ from wts.runlog import append_rows, run_record  # noqa: E402
 OUT = REPO / "results/gates"
 
 
+def _out():
+    OUT.mkdir(parents=True, exist_ok=True)
+    return OUT
+
+
 def summary(gate, **kw):
     row = dict(gate=gate, date=time.strftime("%Y-%m-%d %H:%M"), **kw)
-    append_rows(OUT / "summary.csv", [row])
+    append_rows(_out() / "summary.csv", [row])
     print(f"\n[{gate}] " + "  ".join(f"{k}={v}" for k, v in kw.items()), flush=True)
 
 
@@ -52,7 +57,7 @@ def g1(c):
         rows.append(dict(qid=t["id"], n_adv=sum(p[1] for p in pool[: c["top_k"]]),
                          success=E2.clean_str(t["incorrect"]) in E2.clean_str(resp), response=resp[:300]))
     df = pd.DataFrame(rows)
-    df.to_csv(OUT / "G1.csv", index=False)
+    df.to_csv(_out() / "G1.csv", index=False)
     free_gpu(R)
     summary("G1", llm=c["llm"]["model"], n=len(df), asr=round(df.success.mean(), 4),
             mean_adv_in_top_k=round(df.n_adv.mean(), 2))
@@ -77,7 +82,7 @@ def g2(c):
                                               benchmark_version=c["benchmark_version"], verbose=False)
         rows += [dict(suite=sname, attack=c["attack"], user_task=k[0], injection_task=k[1], utility=v,
                       security=res["security_results"][k]) for k, v in res["utility_results"].items()]
-        pd.DataFrame(rows).to_csv(OUT / "G2.csv", index=False)
+        pd.DataFrame(rows).to_csv(_out() / "G2.csv", index=False)
     df = pd.DataFrame(rows)
     a = df[df.attack == c["attack"]]
     summary("G2", llm=c["llm"]["model"], utility=round(df[df.attack == "none"].utility.mean(), 4),
@@ -92,7 +97,7 @@ def g3(c):
     with IA.in_injecagent():
         from src.output_parsing import evaluate_output_prompted
         from src.prompts.agent_prompts import PROMPT_DICT
-        from src.utils import get_simulated_attacker_tool_response, get_tool_dict
+        from src.utils import get_tool_dict
         tool_dict = get_tool_dict()
         sys_p, user_p = PROMPT_DICT["InjecAgent"]
         for split in ("dh", "ds"):
@@ -101,24 +106,25 @@ def g3(c):
                 o1 = IA._predict(sys_p, user_p, item, tool_dict, llm, step_2=False)
                 ev = evaluate_output_prompted(o1, item["Attacker Tools"][0], item["Attacker Tools"], item["User Tool"],
                                               item["Attacker Instruction"])
-                res = ev["eval"]
+                res, sim_src = ev["eval"], ""
                 if split == "ds" and res == "succ":
                     item.update({k: ev[k] for k in ("Attacker Tool Parameters", "Attacker Tool Thought")})
-                    item["Attacker Tool Response"] = get_simulated_attacker_tool_response(
-                        item["Attacker Tools"][0], item["Attacker Tool Parameters"], tool_dict)
+                    item["Attacker Tool Response"], sim_src = IA.simulated_attacker_response(
+                        item["Attacker Tools"][0], item["Attacker Tool Parameters"], tool_dict, llm)
                     o2 = IA._predict(sys_p, user_p, item, tool_dict, llm, step_2=True)
                     res = evaluate_output_prompted(o2, item["Attacker Tools"][1], item["Attacker Tools"],
                                                    item["User Tool"], item["Attacker Instruction"])["eval"]
-                rows.append(dict(split=split, case=i, eval=res))
+                rows.append(dict(split=split, case=i, eval=res, sim_response=sim_src))
     df = pd.DataFrame(rows)
-    df.to_csv(OUT / "G3.csv", index=False)
+    df.to_csv(_out() / "G3.csv", index=False)
     out = {}
     for split in ("dh", "ds"):
         v = df[(df.split == split) & df["eval"].isin(["succ", "unsucc"])]
         out[f"asr_valid_{split}"] = round((v["eval"] == "succ").mean(), 4) if len(v) else None
     v = df[df["eval"].isin(["succ", "unsucc"])]
     summary("G3", llm=c["llm"]["model"], setting=c["setting"], asr_valid_total=round((v["eval"] == "succ").mean(), 4),
-            valid_rate=round(len(v) / len(df), 4), **out)
+            valid_rate=round(len(v) / len(df), 4), ds_step2_local_simulations=int(df.sim_response.str.startswith("local").sum()),
+            **out)
 
 
 def g4(c):
@@ -129,13 +135,13 @@ def g4(c):
     for b in behaviors:                       # 1) generations (GPU, Ollama)
         gens.append(dict(behavior_id=b["behavior_id"], behavior=b["text"],
                          generation=llm.ask(b["text"], max_tokens=c.get("max_new_tokens", 512))))
-    pd.DataFrame(gens).to_csv(OUT / "G4_generations.csv", index=False)
+    pd.DataFrame(gens).to_csv(_out() / "G4_generations.csv", index=False)
     ollama_unload_all()
     judge = _harmbench_judge(c["judge"])     # 2) HarmBench classifier, bf16 (CPU on the laptop profile)
     for g in gens:
         g["jailbroken"] = judge(g["behavior"], g["generation"])
     df = pd.DataFrame(gens)
-    df.to_csv(OUT / "G4.csv", index=False)
+    df.to_csv(_out() / "G4.csv", index=False)
     summary("G4", llm=c["llm"]["model"], method="DirectRequest", n=len(df), asr=round(df.jailbroken.mean(), 4))
 
 

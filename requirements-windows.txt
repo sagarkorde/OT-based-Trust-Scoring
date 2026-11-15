@@ -11,3 +11,4 @@ openai>=1.40
 agentdojo==0.1.35
 # beir is installed separately with --no-deps (its pytrec_eval dependency needs a C compiler on Windows;
 # only beir.util and beir.datasets.data_loader are used)
+nltk>=3.8          # InjecAgent's evaluator (n-gram repetition check)
