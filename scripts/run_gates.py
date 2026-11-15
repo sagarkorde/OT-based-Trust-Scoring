@@ -37,6 +37,15 @@ def _out():
     return OUT
 
 
+def progress(gate, i, n, t0, every=25):
+    """One line every `every` items: done/total, elapsed, estimated time left."""
+    if (i + 1) % every and i + 1 != n:
+        return
+    el = time.time() - t0
+    left = el / (i + 1) * (n - i - 1)
+    print(f"[{gate}] {i + 1}/{n}  elapsed {el / 60:.1f} min  ~{left / 60:.0f} min left", flush=True)
+
+
 def summary(gate, **kw):
     row = dict(gate=gate, date=time.strftime("%Y-%m-%d %H:%M"), **kw)
     append_rows(_out() / "summary.csv", [row])
@@ -50,8 +59,9 @@ def g1(c):
     retrieval = D.poisonedrag_retrieval(c["dataset"], c["retriever"])
     R = E2.Retriever(c["retriever"])
     llm = build_llm(c["llm"])
-    rows = []
-    for t in targets:
+    rows, t0 = [], time.time()
+    for k, t in enumerate(targets):
+        progress("G1", k, len(targets), t0, every=10)
         pool = E2.build_pool(t, retrieval, corpus, R, D.poisonedrag_attack_texts(t, c["adv_per_query"]), c["top_k"])
         resp = llm.ask(E2.wrap_prompt(t["question"], [p[0] for p in pool[: c["top_k"]]]))
         rows.append(dict(qid=t["id"], n_adv=sum(p[1] for p in pool[: c["top_k"]]),
@@ -100,8 +110,11 @@ def g3(c):
         from src.utils import get_tool_dict
         tool_dict = get_tool_dict()
         sys_p, user_p = PROMPT_DICT["InjecAgent"]
-        for split in ("dh", "ds"):
-            for i, item in enumerate(D.injecagent_cases(split, c["setting"])):
+        cases = [(split, i, item) for split in ("dh", "ds") for i, item in enumerate(D.injecagent_cases(split, c["setting"]))]
+        t0 = time.time()
+        for k, (split, i, item) in enumerate(cases):
+            progress("G3", k, len(cases), t0)
+            if True:
                 item = dict(item)
                 o1 = IA._predict(sys_p, user_p, item, tool_dict, llm, step_2=False)
                 ev = evaluate_output_prompted(o1, item["Attacker Tools"][0], item["Attacker Tools"], item["User Tool"],
@@ -131,14 +144,17 @@ def g4(c):
     from run_e4_adaptive import _harmbench_judge
     llm = build_llm(c["llm"])
     behaviors = D.harmbench_direct_requests()
-    gens = []
-    for b in behaviors:                       # 1) generations (GPU, Ollama)
+    gens, t0 = [], time.time()
+    for k, b in enumerate(behaviors):         # 1) generations (GPU, Ollama)
+        progress("G4-generate", k, len(behaviors), t0)
         gens.append(dict(behavior_id=b["behavior_id"], behavior=b["text"],
                          generation=llm.ask(b["text"], max_tokens=c.get("max_new_tokens", 512))))
     pd.DataFrame(gens).to_csv(_out() / "G4_generations.csv", index=False)
     ollama_unload_all()
     judge = _harmbench_judge(c["judge"])     # 2) HarmBench classifier, bf16 (CPU on the laptop profile)
-    for g in gens:
+    t0 = time.time()
+    for k, g in enumerate(gens):
+        progress("G4-judge", k, len(gens), t0, every=10)
         g["jailbroken"] = judge(g["behavior"], g["generation"])
     df = pd.DataFrame(gens)
     df.to_csv(_out() / "G4.csv", index=False)
