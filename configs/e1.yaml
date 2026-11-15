@@ -1,0 +1,43 @@
+# E1: GenAI prompt-channel detection (RQ1, RQ4, part of RQ6)
+seeds: [0, 1, 2, 3, 4]
+alpha: 0.05
+measures: [w2_gauss, w2_location, w2_shape, w2_sliced, cosine, euclidean, mahalanobis, mmd_rbf]
+
+benign:
+  alpaca_n: 2000          # per seed split: ref 500 / cal pool 1000 / test 500 (cal pool allows n_cal up to 1000)
+  lmsys_n: 2000           # shift test set (RQ4)
+  split: {ref: 500, cal: 1000, test: 500}
+  pca_fit_n: 1000        # extra Alpaca rows, disjoint from the 2000 above, used ONLY to fit PCA for llm_layer encoders
+  revisions: {alpaca: null, lmsys: null}     # pin HF revisions here before running
+
+attacks:
+  deepset: true
+  in_the_wild_n: 1000
+  harmbench_direct: true
+  harmbench_test_cases:   # produced by HarmBench step 1 for the target model; paths filled on the GPU box
+    # GCG:  ext/HarmBench/results/GCG/llama3_1_8b/test_cases/test_cases.json
+    # PAIR: ext/HarmBench/results/PAIR/llama3_1_8b/test_cases/test_cases.json
+    # AutoDAN: ext/HarmBench/results/AutoDAN/llama3_1_8b/test_cases/test_cases.json
+  revisions: {deepset: null, in_the_wild: null}
+
+encoders:
+  - {kind: hf_tokens, model: BAAI/bge-base-en-v1.5}
+  - {kind: hf_tokens, model: sentence-transformers/all-MiniLM-L6-v2}
+  - {kind: llm_layer, model: meta-llama/Llama-3.1-8B-Instruct, layer: 16, pca_dim: 768}
+  # exploratory layer sweep (secondary analysis): layers 8, 24, 32
+
+baselines:
+  perplexity: {model: gpt2}
+  llama_guard: {model: meta-llama/Llama-Guard-3-8B}
+  known_answer: {llm: {model: meta-llama/Llama-3.1-8B-Instruct, base_url: "http://localhost:8000/v1"}}
+  pishield_probe:
+    model: meta-llama/Llama-3.1-8B-Instruct
+    # training data disjoint from all test items: deepset 'train' positives + Alpaca rows outside the
+    # 2000 sampled above; validation = 20% of that training pool
+    train_n: 1000
+  # each baseline can be disabled on a short budget; WTS ablation measures are always run
+
+calibration_study:
+  alphas: [0.01, 0.05, 0.10]
+  n_cals: [50, 100, 200, 500, 1000]
+  n_repeats: 200

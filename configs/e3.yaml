@@ -1,0 +1,30 @@
+# E3: agents (RQ3). AgentDojo inside its own harness + InjecAgent with its own evaluator.
+seeds: [0, 1, 2, 3, 4]
+alpha: 0.05
+encoder: {kind: hf_tokens, model: BAAI/bge-base-en-v1.5}
+
+agentdojo:
+  benchmark_version: v1.2.2
+  suites: [workspace, travel, banking, slack]
+  attacks: [important_instructions, tool_knowledge]
+  calibration_task_frac: 0.5      # user tasks split per seed: calibration (benign runs only) / test
+  defenses:                       # evaluated on test user tasks
+    - none
+    - spotlighting_with_delimiting   # AgentDojo built-in (Hines et al. [27])
+    - transformers_pi_detector       # AgentDojo built-in DeBERTa detector
+    - wts_output_block
+    - wts_output_quarantine
+    - wts_drift_confirm
+    - wts_full                        # output (block) + drift (confirm), Bonferroni alpha/2 each
+  llms:
+    - {model: meta-llama/Llama-3.1-8B-Instruct, base_url: "http://localhost:8000/v1"}
+    - {model: Qwen/Qwen2.5-7B-Instruct, base_url: "http://localhost:8001/v1"}
+    # - {model: gpt-4o-mini-2024-07-18, provider: openai}
+
+injecagent:
+  splits: [dh, ds]
+  settings: [base, enhanced]
+  benign_filler_source: alpaca     # fills the attacker slot of the response template for benign outputs
+  llms:
+    - {model: meta-llama/Llama-3.1-8B-Instruct, base_url: "http://localhost:8000/v1", max_tokens: 512}
+  defenses: [none, wts_output_block]
