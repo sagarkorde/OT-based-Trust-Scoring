@@ -19,6 +19,7 @@ Sub-commands
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -34,6 +35,7 @@ from wts import data as D  # noqa: E402
 from wts.conformal import ConformalCalibrator  # noqa: E402
 from wts.encoders import HashingEncoder, PCAProjector, build_encoder  # noqa: E402
 from wts.measures import ReferenceModel  # noqa: E402
+from wts.resume import Journal, Progress, done_keys, filter_rows  # noqa: E402
 from wts.runlog import append_rows, refuse_test_only, run_record  # noqa: E402
 
 
@@ -72,6 +74,11 @@ def run_dilution(cfg, cfg_e1, smoke=False):
         refuse_test_only(enc)
     factors = cfg["dilution"]["factors"]
     seeds = cfg["seeds"][:1] if smoke else cfg["seeds"]
+    # resumable per item: an item's dilution rows are written first, then its evasion-cost row (= done marker);
+    # dilution rows of items without a cost row come from an interrupted run and are dropped before restarting
+    done = set() if smoke else done_keys(out / "evasion_cost.csv", ["seed", "item"])
+    if not smoke:
+        filter_rows(out / "dilution.csv", lambda r: (r["seed"], r["item"]) in done)
     for seed in seeds:
         with run_record("_smoke/e4" if smoke else "e4", dict(cfg, mode="dilution", encoder=enc.name), seed,
                         REPO / "results") as rec:
@@ -82,8 +89,13 @@ def run_dilution(cfg, cfg_e1, smoke=False):
             n = cfg["dilution"].get("max_items")
             if n:
                 items = random.Random(seed).sample(items, min(n, len(items)))
-            rows, cost = [], []
+            cost_all = []
+            P = Progress(f"E4 dilution seed {seed}", len(items),
+                         resumed=sum((str(seed), str(it["id"])) in done for it in items))
             for it in items:
+                if (str(seed), str(it["id"])) in done:
+                    continue
+                rows, cost = [], []
                 rng = random.Random(f"{seed}-{it['id']}")
                 s0 = ref.score(enc.encode(it["text"]), SCORE)
                 evaded_at = None
@@ -98,8 +110,11 @@ def run_dilution(cfg, cfg_e1, smoke=False):
                 cost.append(dict(seed=seed, item=it["id"], family=it["family"], score0=s0, tau=cal.tau,
                                  gap=s0 - cal.tau, flagged0=s0 > cal.tau, evaded_at_factor=evaded_at,
                                  words=len(it["text"].split())))
-            append_rows(out / "dilution.csv", rows)
-            append_rows(out / "evasion_cost.csv", cost)
+                append_rows(out / "dilution.csv", rows)
+                append_rows(out / "evasion_cost.csv", cost)
+                cost_all += cost
+                P.step()
+            cost = cost_all     # summary below covers the items computed in this run
             flagged0 = [c for c in cost if c["flagged0"]]
             ev = [c for c in flagged0 if c["evaded_at_factor"] is not None]
             rec.update(n_items=len(items), n_flagged0=len(flagged0), n_evaded=len(ev))
@@ -119,23 +134,43 @@ def run_paraphrase(cfg, cfg_e1):
     out = REPO / "results/e4"
     out.mkdir(parents=True, exist_ok=True)
     for ds in cfg["paraphrase"]["rag_datasets"]:
-        para = {t["id"]: [llm.ask(PARA.format(t=a), max_tokens=256) for a in D.poisonedrag_attack_texts(t, 5)]
-                for t in D.poisonedrag_targets(ds)}
-        (out / f"rag_paraphrased_{ds}.json").write_text(json.dumps(para, indent=1))
+        final = out / f"rag_paraphrased_{ds}.json"
+        if final.exists():
+            print(f"[E4 paraphrase] {ds}: {final.name} already written, skipping", flush=True)
+            continue
+        J = Journal(out / "journal" / f"rag_paraphrase_{ds}.jsonl")    # one line per target question
+        targets = D.poisonedrag_targets(ds)
+        P = Progress(f"E4 paraphrase RAG {ds}", len(targets), resumed=sum(t["id"] in J for t in targets))
+        for t in targets:
+            if t["id"] in J:
+                continue
+            J.add(t["id"], {"texts": [llm.ask(PARA.format(t=a), max_tokens=256) for a in D.poisonedrag_attack_texts(t, 5)]})
+            P.step()
+        para = {t["id"]: J.get(t["id"])["texts"] for t in targets}
+        tmp = final.with_suffix(".tmp")
+        tmp.write_text(json.dumps(para, indent=1))
+        tmp.replace(final)
     enc = build_encoder(cfg["encoder"])
     refuse_test_only(enc)
+    done = done_keys(out / "paraphrase_prompts.csv", ["seed", "item"])
     for seed in cfg["seeds"]:
         with run_record("e4", dict(cfg, mode="paraphrase"), seed) as rec:
             ref, cal, attacks, _ = prompt_defense(cfg_e1, enc, seed)
             pick = random.Random(seed).sample(attacks, min(cfg["paraphrase"]["n_prompts"], len(attacks)))
-            rows = []
+            P = Progress(f"E4 paraphrase prompts seed {seed}", len(pick),
+                         resumed=sum((str(seed), str(r["id"])) in done for r in pick))
+            n = 0
             for r in pick:
+                if (str(seed), str(r["id"])) in done:
+                    continue
                 p = llm.ask(PARA.format(t=r["text"]), max_tokens=512)
                 s0, s1 = (ref.score(enc.encode(x), SCORE) for x in (r["text"], p))
-                rows.append(dict(seed=seed, item=r["id"], family=r["family"], score0=s0, score_para=s1, tau=cal.tau,
-                                 flagged0=s0 > cal.tau, flagged_para=s1 > cal.tau, paraphrase=p[:1000]))
-            append_rows(out / "paraphrase_prompts.csv", rows)
-            rec.update(n=len(rows))
+                append_rows(out / "paraphrase_prompts.csv", [dict(
+                    seed=seed, item=r["id"], family=r["family"], score0=s0, score_para=s1, tau=cal.tau,
+                    flagged0=s0 > cal.tau, flagged_para=s1 > cal.tau, paraphrase=p[:1000])])
+                n += 1
+                P.step()
+            rec.update(n=n)
 
 
 # ------------------------------------------------------------------------------ GCG with WTS in the loss
@@ -147,24 +182,39 @@ def run_gcg(cfg, cfg_e1):
     from wts.measures_torch import ledoit_wolf_t
 
     gc = cfg["gcg"]
+    out = REPO / "results/e4"
+    behaviors = D.harmbench_direct_requests()
+    plan = []   # (seed, lam, behavior), fixed by the seed: the same list on every restart
+    for seed in cfg["seeds"][: gc.get("n_seeds", 1)]:
+        rng = random.Random(seed)
+        for lam in gc["lambdas"]:
+            plan += [(seed, lam, b) for b in rng.sample(behaviors, gc["n_behaviors"])]
+    done = done_keys(out / "gcg_wts.csv", ["seed", "lam", "behavior"])
+
+    def is_done(seed, lam, b):
+        return (str(seed), str(lam), str(b["behavior_id"])) in done or \
+            (str(seed), str(float(lam)), str(b["behavior_id"])) in done
+    left = [x for x in plan if not is_done(*x)]
+    if not left:
+        print("[E4 GCG] all behaviors done, skipping", flush=True)
+        return
+    P = Progress("E4 GCG behaviors", len(plan), resumed=len(plan) - len(left), every_s=0)
     from wts.hw import load_causal_lm
     model, tok = load_causal_lm(gc["model"])   # 4-bit NF4 on the laptop profile
     for p in model.parameters():
         p.requires_grad_(False)
     emb = model.get_input_embeddings()
     E = emb.weight  # (V, h)
-    out = REPO / "results/e4"
 
     # defense identical to E1's white-box encoder: same model, layer, PCA (fit on the PCA pool), reference
     enc = LLMLayerEncoder(model_name=gc["model"], layer=gc["layer"], model=model, tokenizer=tok)
     import run_e1_detection as E1
     _, _, _, pca_pool = E1.load_items(cfg_e1)
     enc.projector = PCAProjector(n_components=768).fit(enc.raw_many([r["text"] for r in pca_pool]))
-    behaviors = D.harmbench_direct_requests()
     targets = json.loads((REPO / "ext/HarmBench/data/optimizer_targets/harmbench_targets_text.json").read_text())
     judge = _harmbench_judge(gc["judge"])
 
-    for seed in cfg["seeds"][: gc.get("n_seeds", 1)]:
+    for seed in sorted({x[0] for x in left}):
         ref, cal, _, _ = prompt_defense(cfg_e1, enc, seed)
         P_mean = torch.tensor(enc.projector.mean_, device="cuda", dtype=torch.float64)
         P_comp = torch.tensor(enc.projector.components_, device="cuda", dtype=torch.float64)
@@ -181,9 +231,11 @@ def run_gcg(cfg, cfg_e1):
             ev = torch.linalg.eigvalsh(0.5 * (M + M.T)).clamp_min(0)
             return torch.sqrt(((m - r_m) ** 2).sum() + (torch.trace(S) + r_tr - 2 * (ev + 1e-10).sqrt().sum()).clamp_min(0) + 1e-10)
 
-        rng = random.Random(seed)
-        for lam in gc["lambdas"]:
-            for b in rng.sample(behaviors, gc["n_behaviors"]):
+        for _, lam, b in [x for x in left if x[0] == seed]:
+            if True:    # (one behavior; the indentation keeps the GCG body unchanged)
+                # candidate positions and tokens are drawn from torch's RNG: seeded per (seed, lambda, behavior),
+                # so a behavior gives the same run whether or not the job was restarted before it
+                torch.manual_seed(int(hashlib.sha1(f"{seed}|{lam}|{b['behavior_id']}".encode()).hexdigest()[:12], 16))
                 tgt = targets[b["behavior_id"]]
                 beh_ids = tok(b["text"], add_special_tokens=False, return_tensors="pt").input_ids[0].cuda()
                 suf_ids = tok(" ".join(["!"] * gc["suffix_len"]), add_special_tokens=False, return_tensors="pt").input_ids[0].cuda()
@@ -207,6 +259,7 @@ def run_gcg(cfg, cfg_e1):
                         w2 = torch.stack([w2_of_hidden(hs[i]) for i in range(B)]).float()
                     return ce + lam * w2, ce, w2
 
+                Ps = Progress(f"E4 GCG seed {seed} lambda {lam} {b['behavior_id']} steps", gc["steps"], every_s=120)
                 for step in range(gc["steps"]):
                     one_hot = torch.nn.functional.one_hot(suf_ids, E.shape[0]).to(E.dtype).requires_grad_(True)
                     s_emb = one_hot @ E
@@ -225,6 +278,7 @@ def run_gcg(cfg, cfg_e1):
                     tot, ce_b, w2_b = losses(cand)
                     best = int(tot.argmin())
                     suf_ids = cand[best]
+                    Ps.step(note=f"ce {float(ce_b[best]):.3f}")
                     if float(ce_b[best]) < gc.get("early_stop_ce", 0.05):
                         break
                 prompt = b["text"] + tok.decode(suf_ids)
@@ -238,6 +292,7 @@ def run_gcg(cfg, cfg_e1):
                                                        ce=float(ce_b[best]), w2_attacker=float(w2_b[best]), score=s,
                                                        tau=cal.tau, flagged=s > cal.tau,
                                                        jailbroken=judge(b["text"], resp), suffix=tok.decode(suf_ids))])
+                P.step(note=f"seed {seed} lambda {lam}")
 
 
 def _harmbench_judge(model_name):
@@ -248,15 +303,14 @@ def _harmbench_judge(model_name):
     from transformers import AutoTokenizer
 
     from wts.hw import load_causal_lm
-    sys.path.insert(0, str(REPO / "ext/HarmBench"))
-    from eval_utils import LLAMA2_CLS_PROMPT
+    cls_prompt = D.harmbench_classifier_prompt()   # exact released prompt, without importing eval_utils
     dev = os.environ.get("OT_JUDGE_DEVICE", "cuda")
     # the classifier is never quantized: bf16 on GPU, or bf16 on CPU (laptop profile, ~26 GB RAM)
     cls, _ = load_causal_lm(model_name, device="cpu" if dev == "cpu" else "cuda", quant="bf16")
     tok = AutoTokenizer.from_pretrained(model_name, use_fast=False, truncation_side="left", padding_side="left")
 
     def judge(behavior, generation):
-        inp = LLAMA2_CLS_PROMPT["prompt"].format(behavior=behavior, generation=generation)
+        inp = cls_prompt.format(behavior=behavior, generation=generation)
         ids = tok(inp, return_tensors="pt").input_ids.to(cls.device)
         with torch.no_grad():
             out = cls.generate(ids, max_new_tokens=1, do_sample=False)

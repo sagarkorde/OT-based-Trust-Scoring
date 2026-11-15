@@ -24,6 +24,26 @@ from agentdojo.functions_runtime import EmptyEnv, Env, FunctionsRuntime
 from agentdojo.types import ChatMessage, get_text_content_as_str, text_content_block_from_string
 
 
+class QuietLogger:
+    """Makes AgentDojo save every task's trajectory under `logdir` (what lets a run resume), without printing the
+    chat to the console like AgentDojo's OutputLogger does. Use as `with QuietLogger(logdir): benchmark_...`."""
+
+    def __new__(cls, logdir):
+        from agentdojo.logging import Logger
+
+        class _Quiet(Logger):
+            def __init__(self, d):
+                self.logdir = str(d)
+                self.messages = []
+
+            def log(self, *args, **kwargs):
+                pass
+
+            def log_error(self, message, *args, **kwargs):
+                print(f"[agentdojo] {message}", flush=True)
+        return _Quiet(logdir)
+
+
 def plan_text(msg: ChatMessage) -> str:
     """Serialise an assistant step: its text plus the tool calls it proposes."""
     parts = [get_text_content_as_str(msg.get("content") or []) or ""]
@@ -109,10 +129,12 @@ class WTSIntentDriftGuard(BasePipelineElement):
         return query, runtime, env, messages, extra_args
 
 
-def build_pipeline(llm, name: str, extra_after_tools=(), extra_after_llm=(), system_message=None) -> AgentPipeline:
-    """Same structure as AgentPipeline.from_config with defense=None, plus optional guard elements."""
+def build_pipeline(llm, name: str, extra_after_tools=(), extra_after_llm=(), system_message=None,
+                   first=()) -> AgentPipeline:
+    """Same structure as AgentPipeline.from_config with defense=None, plus optional guard elements.
+    `first`: elements run once at the start of every task (e.g. a progress counter); they must not change state."""
     tools_loop = ToolsExecutionLoop([ToolsExecutor(tool_result_to_str), *extra_after_tools, llm, *extra_after_llm])
-    p = AgentPipeline([SystemMessage(system_message or load_system_message(None)), InitQuery(), llm,
+    p = AgentPipeline([*first, SystemMessage(system_message or load_system_message(None)), InitQuery(), llm,
                        *extra_after_llm, tools_loop])
     p.name = name
     return p

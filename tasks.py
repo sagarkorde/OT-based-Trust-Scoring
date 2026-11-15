@@ -35,7 +35,9 @@ PROFILES = {
 
 
 def run(cmd: list[str], env: dict, log: Path | None = None):
-    full = {**os.environ, **env, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
+    # progress: our own "[task] done/total · elapsed · ~left" lines; library progress bars (tqdm) update at most
+    # every 30 s so the console and the log file stay readable
+    full = {**os.environ, **env, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "TQDM_MININTERVAL": "30",
             "PYTHONPATH": str(REPO / "src") + os.pathsep + os.environ.get("PYTHONPATH", "")}
     print(f"\n>>> {' '.join(cmd)}", flush=True)
     with subprocess.Popen(cmd, cwd=REPO, env=full, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -107,7 +109,9 @@ def main():
     elif t == "refs":
         run(s("verify_refs.py", "paper/refs.bib"), env, log)
     elif t == "all":
-        for x in ("e1", "e2", "e3", "e4", "latency", "tables", "figures", "refs"):
+        steps = ("e1", "e2", "e3", "e4", "latency", "tables", "figures", "refs")
+        for i, x in enumerate(steps, 1):   # every step resumes where it stopped, so `all` can simply be re-run
+            print(f"\n[all] step {i}/{len(steps)}: {x}", flush=True)
             subprocess.check_call([PY, __file__, x, "--profile", a.profile], cwd=REPO)
     else:
         raise SystemExit(f"unknown task {t}")

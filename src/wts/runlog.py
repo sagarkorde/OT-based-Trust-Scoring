@@ -62,17 +62,38 @@ def run_record(exp: str, config: dict, seed: int, out_dir: str | Path = REPO / "
 
 
 def append_rows(csv_path: str | Path, rows: list[dict]):
-    """Append rows to a results CSV, writing the header on first use. Columns must stay stable."""
+    """Append rows to a results CSV, writing the header on first use. Rows may carry different optional columns
+    (e.g. one defense logs `n_flagged`, another `paraphrase`): the file's header is the union of all columns
+    seen, and a row without a column leaves it empty. Each call is flushed to disk before returning, so the
+    rows of finished work items survive a crash."""
     if not rows:
         return
     p = Path(csv_path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    new = not p.exists()
-    with p.open("a", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        if new:
+    cols = list(dict.fromkeys(k for r in rows for k in r))
+    if p.exists() and p.stat().st_size > 0:
+        with p.open(newline="", encoding="utf-8") as f:
+            header = next(csv.reader(f), [])
+        extra = [c for c in cols if c not in header]
+        if extra:   # rare: widen the file once, keeping every existing row
+            import pandas as pd
+            old = pd.read_csv(p, dtype=str, keep_default_na=False)
+            for c in extra:
+                old[c] = ""
+            tmp = p.with_suffix(p.suffix + ".tmp")
+            old.to_csv(tmp, index=False)
+            os.replace(tmp, p)
+            header = header + extra
+        mode, write_header = "a", False
+    else:
+        header, mode, write_header = cols, "w", True
+    with p.open(mode, newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=header, restval="")
+        if write_header:
             w.writeheader()
         w.writerows(rows)
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def refuse_test_only(encoder, allow: bool = False):

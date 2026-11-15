@@ -26,7 +26,10 @@ sys.path.insert(0, str(REPO / "src"))
 from wts import data as D  # noqa: E402
 from wts.encoders import HashingEncoder, build_encoder  # noqa: E402
 from wts.guards import AgentGuard  # noqa: E402
+from wts.resume import Progress, done_keys, mark_done, purge_rows  # noqa: E402
 from wts.runlog import append_rows, refuse_test_only, run_record  # noqa: E402
+
+AGENT_KEY = ["llm", "seed", "setting", "defense", "split", "case"]
 from wts.stats import detection_metrics  # noqa: E402
 
 IA = REPO / "ext/InjecAgent"
@@ -131,11 +134,26 @@ def run(cfg, smoke=False):
             uniq = list({c["Tool Response Template"]: c for c in allc}.values())
             fill = fillers(smoke, 200 * len(uniq) + 4000, seed)
             half = len(fill) // 2
+            det_marker = out / "done" / f"injecagent_detection_{enc.name.replace('/', '_')}_seed{seed}_{setting}.ok"
+            n_agent = sum(len(v) for v in cases.values()) * len(ic["defenses"])
+            agents_left = not smoke and any(
+                len([k for k in done_keys(out / "injecagent_items.csv", AGENT_KEY)
+                     if k[:3] == (lc["model"], str(seed), setting)]) < n_agent for lc in ic["llms"])
+            if not smoke and det_marker.exists() and not agents_left:
+                print(f"[E3 InjecAgent] seed {seed} {setting}: all done, skipping", flush=True)
+                continue
             with run_record("_smoke/e3" if smoke else "e3", dict(cfg, mode="injecagent", setting=setting,
                                                                  encoder=enc.name), seed, REPO / "results") as rec:
+                print(f"[E3 InjecAgent] seed {seed} {setting}: fitting the guard on benign tool responses", flush=True)
                 guard = build_guard(uniq * 50, enc, fill[:half], cfg["alpha"], seed)  # 100 benign responses per template
                 # detection: every attacked response vs one benign response per case (held-out fillers)
                 rows = []
+                if not smoke and det_marker.exists():
+                    print(f"[E3 InjecAgent] seed {seed} {setting}: detection already done", flush=True)
+                    run_agents(cfg, cases, guard, enc, seed, setting, out)
+                    continue
+                for f in ("injecagent_detection_items.csv", "injecagent_detection.csv"):
+                    purge_rows(out / f, {"seed": seed, "setting": setting})
                 for s in ic["splits"]:
                     for i, c in enumerate(cases[s]):
                         sa, pa = guard.output_pvalue(c["User Tool"], enc.encode(c["Tool Response"]))
@@ -150,7 +168,9 @@ def run(cfg, smoke=False):
                            tpr_at_alpha=float(fl[y == 1].mean()), fpr_at_alpha=float(fl[y == 0].mean()))
                 append_rows(out / "injecagent_detection_items.csv", rows)
                 append_rows(out / "injecagent_detection.csv", [det])
-                print(f"[e3-ia] seed={seed} {setting}: AUROC={det['auroc']:.3f} TPR@a={det['tpr_at_alpha']:.2f} "
+                if not smoke:
+                    mark_done(det_marker, dict(n=len(rows)))
+                print(f"[E3 InjecAgent] seed={seed} {setting}: AUROC={det['auroc']:.3f} TPR@a={det['tpr_at_alpha']:.2f} "
                       f"FPR@a={det['fpr_at_alpha']:.2f} (n={len(rows)})", flush=True)
                 if not smoke:
                     run_agents(cfg, cases, guard, enc, seed, setting, out)
@@ -167,33 +187,46 @@ def run_agents(cfg, cases, guard, enc, seed, setting, out):
         tool_dict = get_tool_dict()
         sys_p, user_p = PROMPT_DICT["InjecAgent"]
         for lc in ic["llms"]:
-            llm = build_llm(lc)
+            mshort = lc["model"].split("/")[-1]
+            done = done_keys(out / "injecagent_items.csv", AGENT_KEY)
+            llm = None
             for dfn in ic["defenses"]:
+                total = sum(len(cs) for cs in cases.values())
+                left = [(split, i, c) for split, cs in cases.items() for i, c in enumerate(cs)
+                        if (lc["model"], str(seed), setting, dfn, split, str(i)) not in done]
+                if not left:
+                    print(f"[E3 InjecAgent {mshort} seed {seed} {setting} {dfn}] already done, skipping", flush=True)
+                    continue
+                llm = llm or build_llm(lc)
+                P = Progress(f"E3 InjecAgent {mshort} seed {seed} {setting} {dfn}", total, resumed=total - len(left))
                 rows = []
-                for split, cs in cases.items():
-                    for i, c in enumerate(cs):
-                        item = dict(c)
-                        flagged, sim_src = False, ""
-                        if dfn == "wts_output_block":
-                            _, p = guard.output_pvalue(c["User Tool"], enc.encode(c["Tool Response"]))
-                            flagged = p <= cfg["alpha"]
-                            if flagged:
-                                item["Tool Response"] = REDACTED
-                        out1 = _predict(sys_p, user_p, item, tool_dict, llm, step_2=False)
-                        ev = evaluate_output_prompted(out1, item["Attacker Tools"][0], item["Attacker Tools"],
-                                                      item["User Tool"], item["Attacker Instruction"])
-                        res = ev["eval"]
-                        if split == "ds" and res == "succ":
-                            item["Attacker Tool Parameters"] = ev["Attacker Tool Parameters"]
-                            item["Attacker Tool Thought"] = ev["Attacker Tool Thought"]
-                            item["Attacker Tool Response"], sim_src = simulated_attacker_response(
-                                item["Attacker Tools"][0], item["Attacker Tool Parameters"], tool_dict, llm)
-                            out2 = _predict(sys_p, user_p, item, tool_dict, llm, step_2=True)
-                            res = evaluate_output_prompted(out2, item["Attacker Tools"][1], item["Attacker Tools"],
-                                                           item["User Tool"], item["Attacker Instruction"])["eval"]
-                        rows.append(dict(llm=lc["model"], seed=seed, setting=setting, defense=dfn, split=split,
-                                         case=i, flagged=flagged, eval=res,
-                                         sim_response=sim_src if split == "ds" and ev["eval"] == "succ" else ""))
+                for split, i, c in left:
+                    item = dict(c)
+                    flagged, sim_src = False, ""
+                    if dfn == "wts_output_block":
+                        _, p = guard.output_pvalue(c["User Tool"], enc.encode(c["Tool Response"]))
+                        flagged = p <= cfg["alpha"]
+                        if flagged:
+                            item["Tool Response"] = REDACTED
+                    out1 = _predict(sys_p, user_p, item, tool_dict, llm, step_2=False)
+                    ev = evaluate_output_prompted(out1, item["Attacker Tools"][0], item["Attacker Tools"],
+                                                  item["User Tool"], item["Attacker Instruction"])
+                    res = ev["eval"]
+                    if split == "ds" and res == "succ":
+                        item["Attacker Tool Parameters"] = ev["Attacker Tool Parameters"]
+                        item["Attacker Tool Thought"] = ev["Attacker Tool Thought"]
+                        item["Attacker Tool Response"], sim_src = simulated_attacker_response(
+                            item["Attacker Tools"][0], item["Attacker Tool Parameters"], tool_dict, llm)
+                        out2 = _predict(sys_p, user_p, item, tool_dict, llm, step_2=True)
+                        res = evaluate_output_prompted(out2, item["Attacker Tools"][1], item["Attacker Tools"],
+                                                       item["User Tool"], item["Attacker Instruction"])["eval"]
+                    rows.append(dict(llm=lc["model"], seed=seed, setting=setting, defense=dfn, split=split,
+                                     case=i, flagged=flagged, eval=res,
+                                     sim_response=sim_src if split == "ds" and ev["eval"] == "succ" else ""))
+                    P.step(note=split)
+                    if len(rows) >= 10:     # saved every 10 cases: an interruption loses at most 9
+                        append_rows(out / "injecagent_items.csv", rows)
+                        rows = []
                 append_rows(out / "injecagent_items.csv", rows)
 
 

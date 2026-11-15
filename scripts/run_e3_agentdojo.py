@@ -3,14 +3,22 @@
 Modes
   --gt-detection   LLM-free: tool outputs from AgentDojo's ground-truth trajectories, with and without the
                    attack's injections. Gives tool-output detection AUROC/TPR/FPR on real AgentDojo data.
-  (default)        Full agent runs with an LLM served behind an OpenAI-compatible API (vLLM). Calibration on
-                   benign runs of calibration user tasks, evaluation on the disjoint test user tasks.
+  (default)        Full agent runs with an LLM served behind an OpenAI-compatible API (vLLM / Ollama). Calibration
+                   on benign runs of calibration user tasks, evaluation on the disjoint test user tasks.
   --smoke          --gt-detection with the test-only hashing encoder, written under results/_smoke/.
+
+Resumable
+  Agent runs: every task's full trajectory is saved by AgentDojo under results/agentdojo_logs/<pipeline>/...,
+  and a restarted run reloads finished tasks instead of re-running them (logdir + force_rerun=False). Pipeline
+  names carry model, defense and seed, so no two configurations share logs. Calibration is read back from those
+  logs, so a resumed run calibrates on exactly the same benign trajectories. A finished (model, seed, suite,
+  defense, attack) block is marked in results/e3/done/ and skipped outright.
+  Ground-truth detection: one marker per seed.
 
 Outputs
   results/e3/agentdojo_gt_outputs.csv   per tool output: suite, user/injection task, tool, injected, score, p
-  results/e3/agentdojo_items.csv        per (suite, llm, defense, seed, user_task, injection_task): utility, security
-  results/e3/agentdojo_guard_log/*.csv.gz  every guard decision (output and drift)
+  results/e3/agentdojo_items.csv        per (suite, llm, defense, seed, attack, user_task, injection_task): utility, security
+  results/e3/agentdojo_guard_log/*.csv  guard decisions (output and drift) for tasks run in this process
 """
 from __future__ import annotations
 
@@ -27,15 +35,19 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 from agentdojo.agent_pipeline import GroundTruthPipeline  # noqa: E402
+from agentdojo.agent_pipeline.base_pipeline_element import BasePipelineElement  # noqa: E402
 from agentdojo.attacks.attack_registry import load_attack  # noqa: E402
-from agentdojo.functions_runtime import FunctionsRuntime  # noqa: E402
+from agentdojo.functions_runtime import EmptyEnv, FunctionsRuntime  # noqa: E402
 from agentdojo.task_suite.load_suites import get_suite  # noqa: E402
 from agentdojo.types import get_text_content_as_str  # noqa: E402
 
 from wts.encoders import HashingEncoder, build_encoder  # noqa: E402
 from wts.guards import AgentGuard  # noqa: E402
+from wts.resume import Progress, mark_done, purge_rows  # noqa: E402
 from wts.runlog import append_rows, refuse_test_only, run_record  # noqa: E402
 from wts.stats import detection_metrics  # noqa: E402
+
+LOGDIR = REPO / "results/agentdojo_logs"
 
 
 def split_tasks(suite, frac, seed):
@@ -71,6 +83,64 @@ def gt_tool_outputs(suite, user_task, injections):
     return [(m["tool_call"].function, get_text_content_as_str(m["content"]) or "") for m in msgs if m["role"] == "tool"]
 
 
+# ---------------------------------------------------------------------------------------- progress + logs
+class ProgressElement(BasePipelineElement):
+    """First element of a pipeline: AgentDojo calls the pipeline once per task it actually runs (finished tasks
+    reloaded from the logs never reach it), so counting calls gives live progress in the console."""
+
+    def __init__(self):
+        self.p = None
+        self.name = None
+
+    def reset(self, label: str, total: int | None, resumed: int = 0):
+        self.p = Progress(label, total or 0, resumed=resumed, every_s=60)
+
+    def query(self, query, runtime, env=EmptyEnv(), messages=[], extra_args={}):
+        if self.p is not None:
+            self.p.step()
+        return query, runtime, env, messages, extra_args
+
+
+def count_logged(logdir: Path, pipeline_name: str, suite: str, attack: str, prefix: str = "user_task") -> int:
+    """Finished runs already in AgentDojo's logs for this pipeline / suite / attack ('none' = benign).
+    prefix 'user_task' counts user-task runs; 'injection_task' counts the benign runs of injection tasks that
+    AgentDojo does before an attack (to check that each injection goal is achievable)."""
+    base = Path(logdir) / pipeline_name / suite
+    return sum(1 for _ in base.glob(f"{prefix}*/{attack}/*.json")) if base.exists() else 0
+
+
+def reset_for_attack(pe, label, logdir, pipeline_name, suite, attack, aname, n_user):
+    """Progress for benchmark_suite_with_injections: (unless DoS) every injection task once without injections,
+    then every (user task, injection task) pair under the attack."""
+    n_inj = len(suite.injection_tasks)
+    pre = 0 if attack.is_dos_attack else n_inj
+    done = (0 if attack.is_dos_attack else
+            count_logged(logdir, pipeline_name, suite.name, "none", "injection_task")) + \
+        count_logged(logdir, pipeline_name, suite.name, aname, "user_task")
+    pe.reset(label, pre + n_user * n_inj, done)
+
+
+def harvest_calibration(logdir: Path, pipeline_name: str, suite_name: str, user_ids: list[str]):
+    """Benign tool outputs (by tool) and consecutive plan-step pairs, read from the saved trajectories."""
+    from agentdojo.benchmark import load_task_results
+
+    from wts.agentdojo_hook import plan_text
+    outputs, pairs = defaultdict(list), []
+    for uid in user_ids:
+        try:
+            res = load_task_results(pipeline_name, suite_name, uid, "none", "none", logdir)
+        except FileNotFoundError:
+            continue
+        steps = []
+        for m in res.messages:
+            if m["role"] == "tool" and m.get("tool_call") is not None:
+                outputs[m["tool_call"].function].append(get_text_content_as_str(m["content"]) or "")
+            elif m["role"] == "assistant":
+                steps.append(plan_text(m))
+        pairs += [(steps[i - 1], steps[i]) for i in range(1, len(steps))]
+    return outputs, pairs
+
+
 # ---------------------------------------------------------------------------------------- GT detection
 def run_gt_detection(cfg, smoke=False):
     out = REPO / ("results/_smoke/e3" if smoke else "results/e3")
@@ -82,6 +152,12 @@ def run_gt_detection(cfg, smoke=False):
     suites = ac["suites"]
     attacks = ac["attacks"][:1] if smoke else ac["attacks"]
     for seed in seeds:
+        marker = out / "done" / f"gt_{enc.name}_seed{seed}.ok"
+        if marker.exists() and not smoke:
+            print(f"[E3 ground truth] seed {seed}: already done, skipping", flush=True)
+            continue
+        for f in ("agentdojo_gt_outputs.csv", "agentdojo_gt_detection.csv"):   # drop a partly written seed
+            purge_rows(out / f, {"seed": seed})
         with run_record("_smoke/e3" if smoke else "e3", dict(cfg, mode="gt_detection", encoder=enc.name), seed,
                         REPO / "results") as rec:
             rows, det = [], []
@@ -102,6 +178,8 @@ def run_gt_detection(cfg, smoke=False):
 
             class _Named:  # attacks read the target model name from pipeline.name
                 name = "local"
+            P = Progress(f"E3 ground truth seed {seed}",
+                         sum(len(t) for _, t in splits.values()) * len(attacks), every_s=30)
             for sname, (suite, test_ids) in splits.items():
                 for aname in attacks:
                     attack = load_attack(aname, suite, _Named())
@@ -118,6 +196,7 @@ def run_gt_detection(cfg, smoke=False):
                                 s, p = guard.output_pvalue(tool, enc.encode(text))
                                 rows.append(dict(seed=seed, suite=sname, attack=aname, user_task=uid,
                                                  injection_task=iid, tool=tool, injected=injected, score=s, p=p))
+                        P.step(note=sname)
             df = pd.DataFrame(rows)
             for (sname, aname), g in df.groupby(["suite", "attack"]):
                 g = g[(g.injection_task == "") | g.injected]  # outputs that carry the injection vs clean outputs
@@ -130,9 +209,11 @@ def run_gt_detection(cfg, smoke=False):
             append_rows(out / "agentdojo_gt_detection.csv", det)
             rec.update(n_outputs=len(rows), detection=det)
             for d in det:
-                print(f"[e3-gt] seed={seed} {d['suite']}/{d['attack']}: AUROC={d['auroc']:.3f} "
+                print(f"[E3 ground truth] seed={seed} {d['suite']}/{d['attack']}: AUROC={d['auroc']:.3f} "
                       f"n_pos={d['n_pos']} n_neg={d['n_neg']} TPR@a={d['tpr_at_alpha']:.2f} FPR@a={d['fpr_at_alpha']:.2f}",
                       flush=True)
+        if not smoke:
+            mark_done(marker, dict(n_outputs=len(rows)))
 
 
 # ---------------------------------------------------------------------------------------- full agent runs
@@ -156,8 +237,15 @@ def run_agents(cfg):
     from agentdojo.agent_pipeline import AgentPipeline, PipelineConfig
     from agentdojo.benchmark import benchmark_suite_with_injections, benchmark_suite_without_injections
 
-    from wts.agentdojo_hook import Recorder, WTSIntentDriftGuard, WTSToolOutputGuard, build_pipeline
+    from wts.agentdojo_hook import QuietLogger, WTSIntentDriftGuard, WTSToolOutputGuard, build_pipeline
 
+    with QuietLogger(LOGDIR):          # AgentDojo saves each task's trajectory only inside a logger context
+        _run_agents(cfg, AgentPipeline, PipelineConfig, benchmark_suite_with_injections,
+                    benchmark_suite_without_injections, WTSIntentDriftGuard, WTSToolOutputGuard, build_pipeline)
+
+
+def _run_agents(cfg, AgentPipeline, PipelineConfig, benchmark_suite_with_injections, benchmark_suite_without_injections,
+                WTSIntentDriftGuard, WTSToolOutputGuard, build_pipeline):
     out = REPO / "results/e3"
     (out / "agentdojo_guard_log").mkdir(parents=True, exist_ok=True)
     ac = cfg["agentdojo"]
@@ -167,29 +255,39 @@ def run_agents(cfg):
     for lc in ac["llms"]:
         for seed in cfg["seeds"]:
             llm = make_llm(lc)
-            # 1) calibration: benign runs on every suite's calibration tasks, pooled into one guard
-            recd = Recorder()
-            p_cal = build_pipeline(llm, f"{llm.name}-calib", extra_after_tools=[recd], extra_after_llm=[recd])
-            splits = {}
+            mshort = lc["model"].split("/")[-1]
+            # 1) calibration: benign runs on every suite's calibration tasks (resumable through AgentDojo's logs),
+            #    then read back from the logs and pooled into one guard
+            pe = ProgressElement()
+            p_cal = build_pipeline(llm, f"{llm.name}-calib-seed{seed}", first=[pe])
+            splits, outputs, pairs = {}, defaultdict(list), []
             for sname in ac["suites"]:
                 suite = get_suite(bv, sname)
                 cal_ids, test_ids = split_tasks(suite, ac["calibration_task_frac"], seed)
                 splits[sname] = (suite, test_ids)
-                benchmark_suite_without_injections(p_cal, suite, None, True, user_tasks=cal_ids, benchmark_version=bv)
-            outputs = {t: [enc.encode(x) for x in v] for t, v in recd.outputs.items()}
+                pe.reset(f"E3 {mshort} seed {seed} calibration {sname}", len(cal_ids),
+                         count_logged(LOGDIR, p_cal.name, sname, "none"))
+                benchmark_suite_without_injections(p_cal, suite, LOGDIR, False, user_tasks=cal_ids, benchmark_version=bv)
+                o, pr = harvest_calibration(LOGDIR, p_cal.name, sname, cal_ids)
+                for t, v in o.items():
+                    outputs[t] += v
+                pairs += pr
             guard = AgentGuard(alpha=cfg["alpha"], min_tool_ref_units=10, ref_kwargs=dict(seed=seed))
-            guard.fit_outputs(outputs, seed=seed)
-            guard.fit_drift([(enc.encode(a), enc.encode(b)) for a, b in recd.plan_pairs], seed=seed)
+            guard.fit_outputs({t: [enc.encode(x) for x in v] for t, v in outputs.items()}, seed=seed)
+            guard.fit_drift([(enc.encode(a), enc.encode(b)) for a, b in pairs], seed=seed)
+            print(f"[E3 {mshort} seed {seed}] guard calibrated on {sum(len(v) for v in outputs.values())} benign "
+                  f"tool outputs and {len(pairs)} plan-step pairs", flush=True)
 
             for sname, (suite, test_ids) in splits.items():
                 with run_record("e3", dict(cfg, mode="agents", llm=lc["model"], suite=sname), seed) as rec:
-                    rows = []
                     for dfn in ac["defenses"]:
+                        pe = ProgressElement()
                         olog, dlog = [], []
                         if dfn in ("none", "spotlighting_with_delimiting", "transformers_pi_detector"):
                             pc = PipelineConfig(llm=llm, model_id=None, defense=None if dfn == "none" else dfn,
                                                 system_message_name=None, system_message=None)
                             pipe = AgentPipeline.from_config(pc)
+                            pipe.elements = [pe, *pipe.elements]
                         else:
                             n = 2 if dfn == "wts_full" else 1
                             after_tools, after_llm = [], []
@@ -198,28 +296,38 @@ def run_agents(cfg):
                                 after_tools.append(WTSToolOutputGuard(guard, enc, act, n_tests=n, log=olog))
                             if dfn in ("wts_drift_confirm", "wts_full"):
                                 after_llm.append(WTSIntentDriftGuard(guard, enc, n_tests=n, log=dlog))
-                            pipe = build_pipeline(llm, f"{llm.name}-{dfn}", after_tools, after_llm)
-                        res_benign = benchmark_suite_without_injections(pipe, suite, None, True, user_tasks=test_ids,
-                                                                        benchmark_version=bv)
-                        for (uid, _), u in res_benign["utility_results"].items():
-                            rows.append(dict(llm=lc["model"], seed=seed, suite=sname, defense=dfn, attack="none",
-                                             user_task=uid, injection_task="", utility=u, security=None))
-                        for aname in ac["attacks"]:
-                            attack = load_attack(aname, suite, pipe)
-                            res = benchmark_suite_with_injections(pipe, suite, attack, None, True, user_tasks=test_ids,
-                                                                  benchmark_version=bv, verbose=False)
-                            for key, u in res["utility_results"].items():
-                                rows.append(dict(llm=lc["model"], seed=seed, suite=sname, defense=dfn, attack=aname,
-                                                 user_task=key[0], injection_task=key[1], utility=u,
-                                                 security=res["security_results"][key]))
-                        tag = f"{lc['model'].split('/')[-1]}_{sname}_{dfn}_seed{seed}"
-                        if olog:
-                            pd.DataFrame(olog).to_csv(out / "agentdojo_guard_log" / f"out_{tag}.csv.gz", index=False)
-                        if dlog:
-                            pd.DataFrame(dlog).to_csv(out / "agentdojo_guard_log" / f"drift_{tag}.csv.gz", index=False)
-                    append_rows(out / "agentdojo_items.csv", rows)
-                    rec.update(n_rows=len(rows), n_cal_outputs=sum(len(v) for v in outputs.values()),
-                               n_plan_pairs=len(recd.plan_pairs), pooled_can_flag=guard.pooled_can_flag)
+                            pipe = build_pipeline(llm, "", after_tools, after_llm, first=[pe])
+                        pipe.name = f"{llm.name}-{dfn}-seed{seed}"    # unique log folder per configuration
+                        for aname in ["none", *ac["attacks"]]:
+                            key = dict(llm=lc["model"], seed=seed, suite=sname, defense=dfn, attack=aname)
+                            marker = out / "done" / f"agents_{mshort}_seed{seed}_{sname}_{dfn}_{aname}.ok"
+                            if marker.exists():
+                                print(f"[E3 {mshort} seed {seed} {sname} {dfn} {aname}] already done, skipping", flush=True)
+                                continue
+                            purge_rows(out / "agentdojo_items.csv", key)
+                            label = f"E3 {mshort} seed {seed} {sname} {dfn} {aname}"
+                            if aname == "none":
+                                pe.reset(label, len(test_ids), count_logged(LOGDIR, pipe.name, sname, "none"))
+                                res = benchmark_suite_without_injections(pipe, suite, LOGDIR, False, user_tasks=test_ids,
+                                                                         benchmark_version=bv)
+                                rows = [dict(**key, user_task=k[0], injection_task="", utility=u, security=None)
+                                        for k, u in res["utility_results"].items()]
+                            else:
+                                attack = load_attack(aname, suite, pipe)
+                                reset_for_attack(pe, label, LOGDIR, pipe.name, suite, attack, aname, len(test_ids))
+                                res = benchmark_suite_with_injections(pipe, suite, attack, LOGDIR, False,
+                                                                      user_tasks=test_ids, benchmark_version=bv,
+                                                                      verbose=False)
+                                rows = [dict(**key, user_task=k[0], injection_task=k[1], utility=u,
+                                             security=res["security_results"][k])
+                                        for k, u in res["utility_results"].items()]
+                            append_rows(out / "agentdojo_items.csv", rows)
+                            mark_done(marker, dict(n_rows=len(rows)))
+                        tag = f"{mshort}_{sname}_{dfn}_seed{seed}"
+                        append_rows(out / "agentdojo_guard_log" / f"out_{tag}.csv", olog)
+                        append_rows(out / "agentdojo_guard_log" / f"drift_{tag}.csv", dlog)
+                    rec.update(n_cal_outputs=sum(len(v) for v in outputs.values()), n_plan_pairs=len(pairs),
+                               pooled_can_flag=guard.pooled_can_flag)
 
 
 if __name__ == "__main__":
@@ -228,7 +336,7 @@ if __name__ == "__main__":
     ap.add_argument("--gt-detection", action="store_true")
     ap.add_argument("--smoke", action="store_true")
     a = ap.parse_args()
-    cfg = yaml.safe_load(open(a.config))
+    cfg = yaml.safe_load(open(a.config, encoding="utf-8"))
     if a.smoke or a.gt_detection:
         run_gt_detection(cfg, smoke=a.smoke)
     else:

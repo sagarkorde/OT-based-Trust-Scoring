@@ -30,7 +30,10 @@ from wts.conformal import ConformalCalibrator, coverage_study  # noqa: E402
 from wts.encoders import HashingEncoder, PCAProjector, build_encoder  # noqa: E402
 from wts.hw import free_gpu, ollama_unload_all  # noqa: E402
 from wts.measures import ReferenceModel  # noqa: E402
+from wts.resume import Progress, mark_done, purge_rows, resumable_map, tag_of  # noqa: E402
 from wts.runlog import append_rows, refuse_test_only, run_record  # noqa: E402
+
+E1_VERSION = 1   # bump when the scoring code changes: finished (encoder, seed) markers of older versions are ignored
 from wts.stats import detection_metrics  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
@@ -77,7 +80,7 @@ def run(cfg, smoke=False):
     measures = cfg["measures"]
     if smoke:
         alpaca, lmsys, attacks, pca_pool = load_smoke_items()
-        encoders = [HashingEncoder(dim=64)]
+        enc_cfgs = [dict(kind="hashing", dim=64)]
         split = dict(ref=60, cal=100, test=40)
         cfg = {**cfg, "calibration_study": {**cfg["calibration_study"], "n_cals": [50, 100], "n_repeats": 50}}
         seeds = cfg["seeds"][:2]
@@ -93,19 +96,33 @@ def run(cfg, smoke=False):
                 proj.fit(e.raw_many([r["text"] for r in pca_pool]))
                 e.projector = proj
             return e
-        encoders = (_make(ec) for ec in cfg["encoders"])
+        enc_cfgs = cfg["encoders"]
         split = cfg["benign"]["split"]
         seeds = cfg["seeds"]
 
     families = sorted({r["family"] for r in attacks})
-    for enc in encoders:
+    run_cfg = {k: v for k, v in cfg.items() if k not in ("encoders", "seeds", "baselines")}
+
+    def marker(ec, seed):
+        return out / "done" / f"{tag_of(dict(run_cfg, encoder=ec), E1_VERSION)}_seed{seed}.ok"
+
+    P = Progress("E1 encoders x seeds", len(enc_cfgs) * len(seeds),
+                 resumed=sum(marker(ec, sd).exists() for ec in enc_cfgs for sd in seeds), every_s=0)
+    for ec in enc_cfgs:
+        todo_seeds = [sd for sd in seeds if smoke or not marker(ec, sd).exists()]
+        if not todo_seeds:
+            print(f"[E1] encoder {ec.get('name', ec.get('model', ec['kind']))}: all seeds done, skipping", flush=True)
+            continue
+        enc = HashingEncoder(dim=64) if smoke else _make(ec)
         t0 = time.perf_counter()
         U_alp = encode_cached(enc, [r["text"] for r in alpaca])
         U_lms = encode_cached(enc, [r["text"] for r in lmsys])
         U_att = encode_cached(enc, [r["text"] for r in attacks])
         enc_ms = 1000 * (time.perf_counter() - t0) / max(1, len(alpaca) + len(lmsys) + len(attacks))
 
-        for seed in seeds:
+        for seed in todo_seeds:
+            for f in ("detection.csv", "decisions.csv", "calibration.csv"):   # drop a partly written seed
+                purge_rows(out / f, {"encoder": enc.name, "seed": seed})
             with run_record("e1" if not smoke else "_smoke/e1", dict(cfg, encoder=enc.name), seed, REPO / "results") as rec:
                 rng = np.random.default_rng(seed)
                 perm = rng.permutation(len(alpaca))
@@ -114,15 +131,22 @@ def run(cfg, smoke=False):
                 i_te = perm[split["ref"] + split["cal"]: split["ref"] + split["cal"] + split["test"]]
                 ref = ReferenceModel(seed=seed).fit([U_alp[i] for i in i_ref])
 
-                def score(units):
-                    return [ref.score_all(X, measures) for X in units]
+                def score(units, label=""):
+                    Ps = Progress(f"E1 {enc.name} seed {seed} scoring {label}", len(units), every_s=60) \
+                        if len(units) > 500 else None
+                    res = []
+                    for X in units:
+                        res.append(ref.score_all(X, measures))
+                        if Ps:
+                            Ps.step()
+                    return res
 
                 t1 = time.perf_counter()
                 S_cal = score([U_alp[i] for i in i_cal])
                 score_ms = 1000 * (time.perf_counter() - t1) / len(i_cal)
-                S_te = score([U_alp[i] for i in i_te])
-                S_lms = score(U_lms)
-                S_att = score(U_att)
+                S_te = score([U_alp[i] for i in i_te], "benign test")
+                S_lms = score(U_lms, "benign shift")
+                S_att = score(U_att, "attacks")
 
                 # per-item scores
                 rows = []
@@ -163,7 +187,10 @@ def run(cfg, smoke=False):
                              dict(device="pipeline", dim=enc.dim, measure=f"score_all8:{enc.name}", n_units=len(i_cal),
                                   median_ms=round(score_ms, 3), p95_ms="")])
                 rec.update(n_benign=len(alpaca), n_shift=len(lmsys), n_attack=len(attacks), families=families)
-                print(f"[e1] {enc.name} seed={seed} done: {len(det)} detection rows", flush=True)
+                print(f"[E1] {enc.name} seed={seed} done: {len(det)} detection rows", flush=True)
+            if not smoke:
+                mark_done(marker(ec, seed), dict(encoder=enc.name))
+            P.step(note=f"{enc.name} seed {seed}")
         free_gpu(enc)   # 8 GB GPUs hold one model at a time
 
     if not smoke:
@@ -177,20 +204,31 @@ def run_baselines(cfg, alpaca, lmsys, attacks, out):
     bc = cfg.get("baselines", {})
     items = alpaca + lmsys + attacks
     texts = [r["text"] for r in items]
+    keys = [r["id"] for r in items]
     cols = {}
     ollama_unload_all()
+    jdir = out / "scores" / "baseline_journal"     # one journal per baseline: a restart scores only missing items
+
+    def jpath(name):
+        return jdir / f"{name}_{tag_of(bc[name], 1)}.jsonl"
     if "perplexity" in bc:
         p = B.PerplexityScorer(bc["perplexity"]["model"])
-        cols["ppl_mean"], cols["ppl_window"] = p.scores(texts)
+        v = resumable_map("E1 baseline perplexity", keys, texts,
+                          lambda b: list(zip(*[np.asarray(x).tolist() for x in p.scores(b)])), jpath("perplexity"))
+        cols["ppl_mean"], cols["ppl_window"] = [x[0] for x in v], [x[1] for x in v]
         free_gpu(p)
     if "llama_guard" in bc:
         g = B.LlamaGuardScorer(bc["llama_guard"]["model"])
         t = time.perf_counter()
-        cols["llama_guard"] = g.scores(texts)
+        n_before = len(texts) - sum(1 for _ in open(jpath("llama_guard"), encoding="utf-8")) \
+            if jpath("llama_guard").exists() else len(texts)
+        cols["llama_guard"] = resumable_map("E1 baseline Llama Guard", keys, texts,
+                                            lambda b: list(g.scores(b)), jpath("llama_guard"))
         free_gpu(g)
-        ms = 1000 * (time.perf_counter() - t) / len(texts)
-        append_rows(out.parent / "e5_overhead.csv", [dict(device="cuda", dim="", measure="judge:llama_guard_3_8b",
-                                                          n_units=len(texts), median_ms=round(ms, 3), p95_ms="")])
+        if n_before == len(texts):   # timing only from an uninterrupted pass over every item
+            ms = 1000 * (time.perf_counter() - t) / len(texts)
+            append_rows(out.parent / "e5_overhead.csv", [dict(device="cuda", dim="", measure="judge:llama_guard_3_8b",
+                                                              n_units=len(texts), median_ms=round(ms, 3), p95_ms="")])
     base = pd.DataFrame(dict(item_id=[r["id"] for r in items], label=[r["label"] for r in items],
                              family=[r["family"] for r in items], **cols))
     if "pishield_probe" in bc:
@@ -205,11 +243,21 @@ def run_baselines(cfg, alpaca, lmsys, attacks, out):
         probe = B.LastTokenProbe(pc["model"]).fit([r["text"] for r in pool[:k]], [r["label"] for r in pool[:k]],
                                                    [r["text"] for r in pool[k:]], [r["label"] for r in pool[k:]])
         test_ids = {r["id"] for r in pool}
-        base["pishield"] = probe.scores(texts)
+        # a restart re-fits the probe on the same data; scores journaled by an earlier fit are kept only if the
+        # re-fit selects the same layer (otherwise the journal is discarded and every item is re-scored)
+        meta = jpath("pishield_probe").with_suffix(".layer")
+        if meta.exists() and meta.read_text().strip() != str(probe.layer):
+            jpath("pishield_probe").unlink(missing_ok=True)
+        jdir.mkdir(parents=True, exist_ok=True)
+        meta.write_text(str(probe.layer))
+        base["pishield"] = resumable_map("E1 baseline PIShield probe", keys, texts, lambda b: list(probe.scores(b)),
+                                         jpath("pishield_probe"))
         free_gpu(probe)
         base["pishield_train_overlap"] = base.item_id.isin(test_ids)   # deepset-train rows: excluded in tables
     if "known_answer" in bc:   # Ollama / vLLM: run last, after every in-process model has been freed
-        base["known_answer"] = B.known_answer_scores(texts, build_llm(bc["known_answer"]["llm"]))
+        ka = build_llm(bc["known_answer"]["llm"])
+        base["known_answer"] = resumable_map("E1 baseline known-answer", keys, texts,
+                                             lambda b: list(B.known_answer_scores(b, ka)), jpath("known_answer"), chunk=8)
     base.to_csv(out / "scores" / "baselines.csv.gz", index=False)
 
 

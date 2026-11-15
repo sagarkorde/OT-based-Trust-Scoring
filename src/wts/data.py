@@ -79,6 +79,17 @@ def harmbench_test_cases(path: str | Path, method: str) -> list[dict]:
     return rows
 
 
+def harmbench_classifier_prompt() -> str:
+    """HarmBench's LLAMA2_CLS_PROMPT['prompt'], read from eval_utils.py without importing it (that module imports
+    spacy and datasketch, which the prompt does not need). The string is used exactly as released."""
+    import ast
+    src = (EXT / "HarmBench/eval_utils.py").read_text(encoding="utf-8")
+    for node in ast.parse(src).body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "LLAMA2_CLS_PROMPT" for t in node.targets):
+            return ast.literal_eval(node.value)["prompt"]
+    raise RuntimeError("LLAMA2_CLS_PROMPT not found in HarmBench eval_utils.py")
+
+
 def harmbench_direct_requests() -> list[dict]:
     """HarmBench standard text behaviors as plain requests (no attack wrapper)."""
     path = EXT / "HarmBench/data/behavior_datasets/harmbench_behaviors_text_all.csv"
