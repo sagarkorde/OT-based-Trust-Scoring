@@ -52,7 +52,7 @@ def g1(c):
     llm = build_llm(c["llm"])
     rows = []
     for t in targets:
-        pool = E2.build_pool(t, retrieval, corpus, R, t["adv_texts"][: c["adv_per_query"]], c["top_k"])
+        pool = E2.build_pool(t, retrieval, corpus, R, D.poisonedrag_attack_texts(t, c["adv_per_query"]), c["top_k"])
         resp = llm.ask(E2.wrap_prompt(t["question"], [p[0] for p in pool[: c["top_k"]]]))
         rows.append(dict(qid=t["id"], n_adv=sum(p[1] for p in pool[: c["top_k"]]),
                          success=E2.clean_str(t["incorrect"]) in E2.clean_str(resp), response=resp[:300]))

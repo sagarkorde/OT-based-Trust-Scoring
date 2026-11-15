@@ -104,6 +104,13 @@ def poisonedrag_targets(dataset: str) -> list[dict]:
     return out
 
 
+def poisonedrag_attack_texts(target: dict, n: int = 5) -> list[str]:
+    """PoisonedRAG black-box ('LM_targeted') passages exactly as the benchmark injects them: the target question,
+    a period, then the released generated text (ext/PoisonedRAG/src/attack.py, get_attack, lines 91-93). The
+    question prefix is what makes the passages retrievable; the released texts alone rank far lower."""
+    return [target["question"] + "." + a for a in target["adv_texts"][:n]]
+
+
 def poisonedrag_retrieval(dataset: str, retriever: str = "contriever") -> dict:
     """Precomputed BEIR top-100 retrieval released with PoisonedRAG: {query_id: {doc_id: score}}."""
     p = EXT / f"PoisonedRAG/results/beir_results/{dataset}-{retriever}.json"

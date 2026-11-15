@@ -119,7 +119,7 @@ def run_paraphrase(cfg, cfg_e1):
     out = REPO / "results/e4"
     out.mkdir(parents=True, exist_ok=True)
     for ds in cfg["paraphrase"]["rag_datasets"]:
-        para = {t["id"]: [llm.ask(PARA.format(t=a), max_tokens=256) for a in t["adv_texts"][:5]]
+        para = {t["id"]: [llm.ask(PARA.format(t=a), max_tokens=256) for a in D.poisonedrag_attack_texts(t, 5)]
                 for t in D.poisonedrag_targets(ds)}
         (out / f"rag_paraphrased_{ds}.json").write_text(json.dumps(para, indent=1))
     enc = build_encoder(cfg["encoder"])

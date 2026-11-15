@@ -22,3 +22,9 @@ table/figure number is written next to the value. Never fill it from memory. Lea
 ## Log
 
 Append one entry per attempt: date, gate, command, commit hash, result, explanation of any gap.
+
+- 2026-11-15 21:15 · G1 · `run.ps1 gates G1 G3 G4` · commit 7979197 · ASR 0.76 (published 0.97), mean poisoned
+  passages in top-5 = 2.4 · **FAIL**. Cause: harness bug, not the model. PoisonedRAG prepends the target question
+  ("question" + ".") to each released adversarial text (src/attack.py, get_attack, lines 91-93); our harness used
+  the released texts alone, so fewer reached the top-5. Fixed in the next commit (wts.data.poisonedrag_attack_texts,
+  used by G1, E2 and E4). G1 to be re-run.

@@ -45,13 +45,13 @@ def test_gate_check_blocks_until_all_gates_pass(tmp_path):
 
 def test_e2_attack_variants():
     e2 = _load("run_e2_rag")
-    t = dict(id="q1", question="who wrote x?", adv_texts=["a b c d", "e f g h", "i", "j", "k"])
+    t = dict(id="q1", question="q", adv_texts=["a b c d", "e f g h", "i", "j", "k"])
     cfg = dict(adv_per_query=5)
     filler = ["benign words here and there"] * 10
     assert e2.attack_texts("clean", t, cfg, filler) == []
     assert len(e2.attack_texts("poisonedrag_n2", t, cfg, filler)) == 2
     d = e2.attack_texts("poisonedrag_dilute_2x", t, cfg, filler)
-    assert len(d[0].split()) == 4 + 8 and d[0].startswith("a b c d")
+    assert d[0].startswith("q.a b c d") and len(d[0].split()) == 4 + 8
     assert "I don't know" in e2.attack_texts("jamming_explicit", t, cfg, filler)[0]
     assert e2.clean_str(" Paris. ") == "paris"
 
@@ -100,3 +100,14 @@ def test_ensure_ollama_tag_pulls_and_creates_against_a_fake_server():
     assert ensure_ollama_tag("ots-c", "llama3.1:8b", 4096, url) is False      # already there: nothing
     assert calls == []
     srv.shutdown()
+
+
+def test_poisonedrag_passages_carry_the_question_prefix_like_the_benchmark():
+    sys.path.insert(0, str(REPO / "src"))
+    from wts import data as D
+    t = D.poisonedrag_targets("nq")[0]
+    adv = D.poisonedrag_attack_texts(t, 5)
+    assert len(adv) == 5 and all(a.startswith(t["question"] + ".") for a in adv)
+    assert adv[0] == t["question"] + "." + t["adv_texts"][0]   # = PoisonedRAG src/attack.py get_attack
+    e2 = _load("run_e2_rag")
+    assert e2.attack_texts("poisonedrag_blackbox", dict(t), dict(adv_per_query=5), []) == adv

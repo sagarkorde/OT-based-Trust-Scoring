@@ -65,7 +65,7 @@ def dilute(text: str, factor: float, filler: list[str], rng: random.Random) -> s
 def attack_texts(name: str, t: dict, cfg: dict, filler: list[str]) -> list[str]:
     """clean | poisonedrag_blackbox | jamming_explicit | poisonedrag_dilute_<f>x (E4) |
     poisonedrag_paraphrase (E4; reads results/e4/rag_paraphrased_<ds>.json written by run_e4_adaptive.py)."""
-    adv = t["adv_texts"][: cfg["adv_per_query"]]
+    adv = D.poisonedrag_attack_texts(t, cfg["adv_per_query"])
     if name == "clean":
         return []
     if name == "poisonedrag_blackbox":
