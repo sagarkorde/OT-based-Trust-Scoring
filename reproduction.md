@@ -8,7 +8,7 @@ table/figure number is written next to the value. Never fill it from memory. Lea
 
 | Gate | What | Setting | Published (source table) | Reproduced (mean over seeds) | Seeds | Diff | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| G1 | PoisonedRAG ASR, NQ | Black-box attack (released adversarial texts), N = 5 passages per question, Contriever, top-k = 5, dot product, 100 target questions; LLM LLaMA-2-7B (laptop: Ollama llama2:7b-chat Q4) | 0.97 (PoisonedRAG [14], Table 1, NQ black-box, LLaMa-2-7B) | — | — | — | NOT RUN | Paper uses temperature 0.1 (we use 0) and fp16 weights (we use Q4); ASR by substring match as in the paper |
+| G1 | PoisonedRAG ASR, NQ | Black-box attack (released adversarial texts), N = 5 passages per question, Contriever, top-k = 5, dot product, 100 target questions; LLM LLaMA-2-7B (laptop: Ollama llama2:7b-chat Q4) | 0.97 (PoisonedRAG [14], Table 1, NQ black-box, LLaMa-2-7B) | 0.96 (96/100; 95 % CI 0.90-0.98) | 1 (temperature 0) | −0.01 | **PASS** | Paper uses temperature 0.1 (we use 0) and fp16 weights (we use Q4); ASR by substring match as in the paper |
 | G2 | AgentDojo targeted ASR and utility, no defense | `important_instructions` attack, all 4 suites, benchmark v1.2.2 | TO FILL — no model that fits 8 GB is reported; needs an API model (e.g. gpt-4o-mini) or an explained gap signed off by the authors | — | — | — | NOT RUN | Laptop run with Llama 3.1 8B Q4 is recorded for the paper but has no published comparator |
 | G3 | InjecAgent ASR-valid, base setting | Prompted (ReAct) agent, DH and DS, InjecAgent's own evaluator; laptop: Ollama mistral:7b-instruct-v0.2 Q4, 8k context | 16.7 % (InjecAgent [22], Table 3, prompted Mistral-7B, base setting, Total) | — | — | — | NOT RUN | Check which Mistral-7B release the paper used (appendix model list) before comparing |
 | G4 | HarmBench ASR, DirectRequest | 200 standard text behaviours (all splits), HarmBench Llama-2-13B classifier (bf16, CPU on laptop); model Mistral 7B Instruct v0.2 (laptop: Ollama Q4) | 46.0 % (HarmBench [10], Table 6, standard behaviours, all splits, DR, Mistral 7B); test split only: 44.7 % (Table 7) | 42.0 % (84/200; 95 % CI 35.4-48.9) | 1 (temperature 0) | −4.0 | **PASS** | HarmBench lists Mistral 7B as Mistral 7B Instruct v0.2 (Appendix C.2) |
@@ -47,3 +47,9 @@ Append one entry per attempt: date, gate, command, commit hash, result, explanat
   25.7 GiB) · ASR **42.0 %** (84/200; Wilson 95 % CI 35.4-48.9) vs published 46.0 % (Table 6) · diff −4.0 ·
   **PASS** (inside ±5; the published value lies inside the CI). ASR recomputed independently from G4.csv.
   First attempt crashed before judging (missing sentencepiece/protobuf, fixed in acfc1c0); no item was judged twice.
+
+- 2026-11-16 12:24 · G1 (attempt 2, gate version 2) · `run.ps1 gates G1` · commit 3e0388f · LLaMA-2-7B-chat
+  (Ollama Q4, temperature 0, 150 new tokens), NQ, Contriever, top-5, 5 adversarial passages per question with the
+  question prefix as in PoisonedRAG's get_attack · ASR **0.96** (96/100; Wilson 95 % CI 0.90-0.98) vs published 0.97
+  (Table 1) · diff −0.01 · **PASS**. Mean poisoned passages in top-5 = 4.79 (5/5 for 86 questions; was 2.4 in
+  attempt 1), confirming the attempt-1 gap was the missing prefix. ASR recomputed independently from G1.csv.
