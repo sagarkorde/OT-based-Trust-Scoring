@@ -202,3 +202,18 @@ def test_encode_cache_recovers_from_a_torn_file(tmp_path):
     f.write_bytes(f.read_bytes()[:20])          # simulate a crash in the middle of writing
     b = encode_cached(enc, texts, cache_dir=tmp_path)
     assert all(np.allclose(x, y, atol=1e-2) for x, y in zip(a, b))
+
+
+def test_g3_sensitivity_gate_writes_its_own_files(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("run_gates", REPO / "scripts/run_gates.py")
+    G = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(G)
+    monkeypatch.setattr(G, "OUT", tmp_path)
+    (tmp_path / "G3.csv").write_text("split,case,eval,sim_response\ndh,0,succ,\n")   # must not be imported
+    monkeypatch.setattr(G, "build_llm", lambda c: type("L", (), {"model": "s", "chat": lambda self, m, **k: "nothing"})())
+    cfg = {"setting": "base", "llm": {"model": "v01", "ollama_base": "hf.co/x:Q4_K_M"}}
+    G.g3(cfg, "G3_v01")
+    assert len(pd.read_csv(tmp_path / "G3_v01.csv")) == 1054 and len(G.journal("G3_v01", cfg)) == 1054
+    assert (tmp_path / "G3.csv").read_text().count("\n") == 2                      # untouched
+    last = json.loads((tmp_path / "summary.jsonl").read_text().splitlines()[-1])
+    assert last["gate"] == "G3_v01" and last["weights"] == "hf.co/x:Q4_K_M"

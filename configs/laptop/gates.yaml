@@ -15,6 +15,12 @@ G2:   # no 8 GB-sized model on the AgentDojo leaderboard: measured for the recor
 G3:   # InjecAgent Table 3 reports prompted Mistral-7B (base setting) -> comparable model
   setting: base
   llm: {model: ots-mistral-7b-v02-8k, ollama_base: "mistral:7b-instruct-v0.2-q4_K_M", num_ctx: 8192, base_url: "http://localhost:11434/v1", max_tokens: 512}
+G3_v01:   # sensitivity check for G3: InjecAgent does not name its Mistral-7B release; same run with Instruct v0.1.
+  # Same 4-bit level as G3 (Q4_K_M GGUF of the official weights); chat template and stop words copied from the v0.2
+  # Ollama model, because this GGUF carries none (v0.1 and v0.2 share the [INST] ... [/INST] format)
+  setting: base
+  llm: {model: ots-mistral-7b-v01-8k, ollama_base: "hf.co/TheBloke/Mistral-7B-Instruct-v0.1-GGUF:Q4_K_M",
+        template_from: "mistral:7b-instruct-v0.2-q4_K_M", num_ctx: 8192, base_url: "http://localhost:11434/v1", max_tokens: 512}
 G4:   # HarmBench reports Mistral 7B (Instruct v0.2) with DirectRequest -> comparable model
   llm: {model: ots-mistral-7b-v02-4k, ollama_base: "mistral:7b-instruct-v0.2-q4_K_M", num_ctx: 4096, base_url: "http://localhost:11434/v1", max_tokens: 512}
   max_new_tokens: 512

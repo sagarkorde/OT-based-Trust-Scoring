@@ -15,7 +15,7 @@ def gate_status(md: str) -> dict[str, str]:
         m = re.match(r"\|\s*(G\d)\s*\|", line)
         if m:
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            out[m.group(1)] = cells[7] if len(cells) > 7 else ""
+            out[m.group(1)] = (cells[7] if len(cells) > 7 else "").replace("*", "").strip()   # "**PASS**" -> "PASS"
     return out
 
 

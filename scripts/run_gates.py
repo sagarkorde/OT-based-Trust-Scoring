@@ -35,7 +35,7 @@ from wts.resume import Journal, Progress, tag_of  # noqa: E402
 from wts.runlog import run_record  # noqa: E402
 
 OUT = REPO / "results/gates"
-GATE_VERSION = {"G1": 2, "G2": 1, "G3": 1, "G4": 1}
+GATE_VERSION = {"G1": 2, "G2": 1, "G3": 1, "G3_v01": 1, "G4": 1}
 
 
 def _out():
@@ -125,11 +125,13 @@ def _g2(c, logdir, ProgressElement, count_logged, make_llm, build_pipeline, load
 
 
 # ---------------------------------------------------------------------------------------------- G3
-def g3(c):
+def g3(c, gate="G3"):
+    """InjecAgent ASR-valid. gate="G3_v01": the same run with Mistral-7B-Instruct-v0.1 (sensitivity check for the
+    unnamed Mistral release in InjecAgent), written to its own journal, CSV and summary line."""
     import run_e3_injecagent as IA
-    J = journal("G3", c)
+    J = journal(gate, c)
     legacy = _out() / "G3.csv"                      # finished before journals existed (same config, v1)
-    if len(J) == 0 and legacy.exists():
+    if gate == "G3" and len(J) == 0 and legacy.exists():
         old = pd.read_csv(legacy).fillna("")
         for r in old.itertuples():
             J.add(Journal.key(r.split, r.case), dict(split=r.split, case=int(r.case), eval=r.eval,
@@ -144,7 +146,7 @@ def g3(c):
         sys_p, user_p = PROMPT_DICT["InjecAgent"]
         cases = [(split, i, item) for split in ("dh", "ds") for i, item in enumerate(D.injecagent_cases(split, c["setting"]))]
         todo = [x for x in cases if Journal.key(x[0], x[1]) not in J]
-        P = Progress("G3 InjecAgent", len(cases), resumed=len(cases) - len(todo))
+        P = Progress(f"{gate} InjecAgent", len(cases), resumed=len(cases) - len(todo))
         for split, i, item in todo:
             item = dict(item)
             o1 = IA._predict(sys_p, user_p, item, tool_dict, llm, step_2=False)
@@ -162,13 +164,13 @@ def g3(c):
             P.step()
     df = pd.DataFrame([J.get(Journal.key(s, i)) for s, i, _ in cases]).drop(columns="_key")
     df["sim_response"] = df.sim_response.fillna("")
-    df.to_csv(_out() / "G3.csv", index=False)
+    df.to_csv(_out() / f"{gate}.csv", index=False)
     out = {}
     for split in ("dh", "ds"):
         v = df[(df.split == split) & df["eval"].isin(["succ", "unsucc"])]
         out[f"asr_valid_{split}"] = round((v["eval"] == "succ").mean(), 4) if len(v) else None
     v = df[df["eval"].isin(["succ", "unsucc"])]
-    summary("G3", llm=c["llm"]["model"], setting=c["setting"], asr_valid_total=round((v["eval"] == "succ").mean(), 4),
+    summary(gate, llm=c["llm"]["model"], weights=c["llm"].get("ollama_base"), setting=c["setting"], asr_valid_total=round((v["eval"] == "succ").mean(), 4),
             valid_rate=round(len(v) / len(df), 4),
             ds_step2_local_simulations=int(df.sim_response.str.startswith("local").sum()), **out)
 
@@ -211,10 +213,10 @@ def g4(c):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=str(REPO / "configs/laptop/gates.yaml"))
-    ap.add_argument("--only", nargs="*", default=["G1", "G2", "G3", "G4"])
+    ap.add_argument("--only", nargs="*", default=["G1", "G2", "G3", "G4"])   # G3_v01: sensitivity check, on request
     a = ap.parse_args()
     cfg = yaml.safe_load(open(a.config, encoding="utf-8"))
     for g in a.only:
         print(f"\n=== {g} ===", flush=True)
         with run_record("gates", dict(cfg[g], gate=g, version=GATE_VERSION[g]), 0) as rec:
-            {"G1": g1, "G2": g2, "G3": g3, "G4": g4}[g](cfg[g])
+            {"G1": g1, "G2": g2, "G3": g3, "G3_v01": lambda c: g3(c, "G3_v01"), "G4": g4}[g](cfg[g])

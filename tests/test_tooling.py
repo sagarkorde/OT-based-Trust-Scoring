@@ -39,6 +39,7 @@ def test_gate_check_blocks_until_all_gates_pass(tmp_path):
     gc = _load("gate_check")
     status = gc.gate_status((REPO / "reproduction.md").read_text())
     assert set(status) == {"G1", "G2", "G3", "G4"} and not gc.all_pass(status)
+    assert status["G1"] == "PASS" and status["G4"] == "PASS"                 # bold markdown is read as PASS
     passed = (REPO / "reproduction.md").read_text().replace("| NOT RUN |", "| PASS |")
     assert gc.all_pass(gc.gate_status(passed))
 
@@ -85,7 +86,13 @@ def test_ensure_ollama_tag_pulls_and_creates_against_a_fake_server():
         def do_POST(self):
             n = int(self.headers["Content-Length"])
             calls.append((self.path, json.loads(self.rfile.read(n))))
-            self.send_response(200); self.end_headers(); self.wfile.write(b'{"status":"success"}\n')
+            self.send_response(200); self.end_headers()
+            if self.path == "/api/show":   # what Ollama returns for mistral:7b-instruct-v0.2
+                self.wfile.write(json.dumps({"template": "[INST] {{ .Prompt }} [/INST]",
+                                             "parameters": 'stop                           "[INST]"\n'
+                                                           'stop                           "[/INST]"'}).encode())
+            else:
+                self.wfile.write(b'{"status":"success"}\n')
 
     srv = HTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -99,6 +106,12 @@ def test_ensure_ollama_tag_pulls_and_creates_against_a_fake_server():
     calls.clear()
     assert ensure_ollama_tag("ots-c", "llama3.1:8b", 4096, url) is False      # already there: nothing
     assert calls == []
+    calls.clear()                                                              # GGUF without a chat template
+    assert ensure_ollama_tag("ots-d", "hf.co/x/y-GGUF:Q4_K_M", 8192, url, template_from="llama3.1:8b") is True
+    assert [c[0] for c in calls] == ["/api/pull", "/api/show", "/api/create"]
+    created = calls[-1][1]
+    assert created["template"] == "[INST] {{ .Prompt }} [/INST]"
+    assert created["parameters"] == {"num_ctx": 8192, "temperature": 0, "stop": ["[INST]", "[/INST]"]}
     srv.shutdown()
 
 

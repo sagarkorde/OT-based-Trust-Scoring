@@ -223,7 +223,7 @@ def make_llm(lc):
     if lc.get("ollama_base"):
         from wts.hw import ensure_ollama_tag
         ensure_ollama_tag(lc["model"], lc["ollama_base"], lc.get("num_ctx", 16384),
-                          lc["base_url"].replace("/v1", ""))
+                          lc["base_url"].replace("/v1", ""), template_from=lc.get("template_from"))
     if lc.get("provider") == "openai":
         llm = OpenAILLM(openai.OpenAI(), lc["model"])
         llm.name = lc["model"]

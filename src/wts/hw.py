@@ -125,9 +125,12 @@ def ollama_unload_all(base: str = "http://localhost:11434"):
         return []
 
 
-def ensure_ollama_tag(name: str, base: str, num_ctx: int, url: str = "http://localhost:11434"):
+def ensure_ollama_tag(name: str, base: str, num_ctx: int, url: str = "http://localhost:11434",
+                      template_from: str | None = None):
     """Create the fixed-context Ollama tag `name` from `base` if it does not exist (pulls `base` if needed).
-    Uses Ollama's REST API, so configs alone decide which models a run needs."""
+    Uses Ollama's REST API, so configs alone decide which models a run needs.
+    template_from: copy the chat template and stop words of this (installed or pullable) Ollama model. For GGUFs
+    pulled from Hugging Face whose metadata carries no chat template (e.g. older Mistral-7B-Instruct-v0.1 GGUFs)."""
     import json
     import urllib.request
 
@@ -146,6 +149,21 @@ def ensure_ollama_tag(name: str, base: str, num_ctx: int, url: str = "http://loc
     if base not in have:
         print(f"[ollama] pulling {base} ...", flush=True)
         post("/api/pull", {"model": base})
-    post("/api/create", {"model": name, "from": base, "parameters": {"num_ctx": num_ctx, "temperature": 0}})
-    print(f"[ollama] created {name} (from {base}, num_ctx={num_ctx})", flush=True)
+    body = {"model": name, "from": base, "parameters": {"num_ctx": num_ctx, "temperature": 0}}
+    if template_from:
+        if template_from not in have:
+            print(f"[ollama] pulling {template_from} (for its chat template) ...", flush=True)
+            post("/api/pull", {"model": template_from})
+        req = urllib.request.Request(f"{url}/api/show", data=json.dumps({"model": template_from}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            info = json.loads(r.read())
+        body["template"] = info["template"]
+        stops = [ln.split(None, 1)[1].strip().strip('"') for ln in info.get("parameters", "").splitlines()
+                 if ln.startswith("stop")]
+        if stops:
+            body["parameters"]["stop"] = stops
+    post("/api/create", body)
+    print(f"[ollama] created {name} (from {base}, num_ctx={num_ctx}"
+          + (f", chat template of {template_from}" if template_from else "") + ")", flush=True)
     return True
