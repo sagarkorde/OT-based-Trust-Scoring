@@ -138,3 +138,21 @@ def build_pipeline(llm, name: str, extra_after_tools=(), extra_after_llm=(), sys
                        *extra_after_llm, tools_loop])
     p.name = name
     return p
+
+
+def text_tool_results_local_llm(client, model: str):
+    """AgentDojo's prompt-based LocalLLM, sending each tool result as {"result": "<text>"}.
+    Since AgentDojo moved messages to content blocks, the pinned LocalLLM serialises tool results as
+    {"result": [{"type": "text", "content": "<text>"}]}; the LocalLLM the prompt was written for (normster/agentdojo,
+    used for the Llama 3.1 8B AgentDojo numbers in Mu et al. 2025) sends the plain text. Everything else (system
+    prompt with the tool list, roles, temperature 0, top-p 0.9, output parsing) is AgentDojo's own code."""
+    from agentdojo.agent_pipeline import LocalLLM
+    from agentdojo.types import get_text_content_as_str
+
+    class _LocalLLMTextResults(LocalLLM):
+        def query(self, query, runtime, env=None, messages=(), extra_args={}):
+            msgs = [dict(m, content=get_text_content_as_str(m["content"]))
+                    if m["role"] == "tool" and isinstance(m.get("content"), list) else m for m in messages]
+            q, r, e, out, x = super().query(query, runtime, env, msgs, extra_args)
+            return q, r, e, [*messages, out[-1]], x     # keep AgentDojo's own message objects in the trajectory
+    return _LocalLLMTextResults(client, model)

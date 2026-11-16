@@ -36,7 +36,7 @@ from wts.resume import Journal, Progress, tag_of  # noqa: E402
 from wts.runlog import run_record  # noqa: E402
 
 OUT = REPO / "results/gates"
-GATE_VERSION = {"G1": 2, "G2": 1, "G3": 1, "G3_v01": 1, "G4": 1}
+GATE_VERSION = {"G1": 2, "G2": 2, "G3": 1, "G3_v01": 1, "G4": 1}
 
 
 def _out():
@@ -112,23 +112,28 @@ def _g2(c, logdir, ProgressElement, count_logged, make_llm, build_pipeline, load
         sys.exit("G2 needs an OpenAI API key: run  setx OPENAI_API_KEY \"<your key>\"  in PowerShell, close the window, "
                  "open a new one and run the gate again. (Never paste the key into a chat or a file in the repo.)")
     llm = make_llm(c["llm"])
-    print(f"[G2] model {c['llm']['model']}, AgentDojo benchmark {c['benchmark_version']}, attack {c['attack']}",
-          flush=True)
+    print(f"[G2] model {c['llm']['model']}, AgentDojo benchmark {c['benchmark_version']}, attack {c['attack']}"
+          + (f", user tasks of difficulty {c['difficulty']}" if c.get("difficulty") else ""), flush=True)
     tag = tag_of(c, GATE_VERSION["G2"])
     rows = []
     for sname in c["suites"]:
         suite = get_suite(c["benchmark_version"], sname)
         attack_name = c["attack"]
+        uts = sorted(suite.user_tasks)
+        if c.get("difficulty"):          # e.g. "easy": AgentDojo's own per-task difficulty label
+            from agentdojo.base_tasks import TaskDifficulty
+            uts = [u for u in uts if suite.user_tasks[u].DIFFICULTY == TaskDifficulty[c["difficulty"].upper()]]
         pe = ProgressElement()
         pipe = build_pipeline(llm, f"{llm.name}-gate-{tag}", first=[pe])
-        pe.reset(f"G2 {sname} benign", len(suite.user_tasks), count_logged(logdir, pipe.name, sname, "none"))
-        ben = benchmark_suite_without_injections(pipe, suite, logdir, False, benchmark_version=c["benchmark_version"])
+        pe.reset(f"G2 {sname} benign", len(uts), count_logged(logdir, pipe.name, sname, "none"))
+        ben = benchmark_suite_without_injections(pipe, suite, logdir, False, user_tasks=uts,
+                                                 benchmark_version=c["benchmark_version"])
         rows += [dict(suite=sname, attack="none", user_task=k[0], injection_task="", utility=v, security=None)
                  for k, v in ben["utility_results"].items()]
         attack = load_attack(attack_name, suite, pipe)
         reset_for_attack(pe, f"G2 {sname} {attack_name}", logdir, pipe.name, suite, attack, attack_name,
-                         len(suite.user_tasks))
-        res = benchmark_suite_with_injections(pipe, suite, attack, logdir, False,
+                         len(uts))
+        res = benchmark_suite_with_injections(pipe, suite, attack, logdir, False, user_tasks=uts,
                                               benchmark_version=c["benchmark_version"], verbose=False)
         rows += [dict(suite=sname, attack=attack_name, user_task=k[0], injection_task=k[1], utility=v,
                       security=res["security_results"][k]) for k, v in res["utility_results"].items()]
@@ -137,7 +142,7 @@ def _g2(c, logdir, ProgressElement, count_logged, make_llm, build_pipeline, load
     a = df[df.attack == c["attack"]]
     summary("G2", llm=c["llm"]["model"], utility=round(df[df.attack == "none"].utility.mean(), 4),
             utility_under_attack=round(a.utility.mean(), 4), targeted_asr=round(a.security.astype(float).mean(), 4),
-            n_cases=len(a))
+            n_cases=len(a), n_utility_under_attack=int(a.utility.sum()), n_attack_success=int(a.security.astype(bool).sum()))
 
 
 # ---------------------------------------------------------------------------------------------- G3

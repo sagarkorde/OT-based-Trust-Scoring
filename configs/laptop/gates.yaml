@@ -7,14 +7,18 @@ G1:   # PoisonedRAG reports LLaMA-2-7B among its LLMs -> comparable model
   adv_per_query: 5
   n_targets: 100
   llm: {model: ots-llama2-7b-4k, ollama_base: "llama2:7b-chat", num_ctx: 4096, base_url: "http://localhost:11434/v1", max_tokens: 150}
-G2:   # AgentDojo results table (docs/results-table.html, pinned commit 089ed468): openai gpt-4o-mini-2024-07-18,
-  # defense None, important_instructions, 2024-07-19 -> utility 68.04 %, utility under attack 49.92 %, targeted ASR
-  # 27.19 %. That row predates benchmark v1.1, so it was run on v1: reproduce on v1. No 8 GB-sized local model is on
-  # the table, hence the API model (authors' decision 2026-11-16). Needs OPENAI_API_KEY; uses no local GPU.
-  benchmark_version: v1
+G2:   # AgentDojo, Llama 3.1 8B Instruct, free and local (authors' decision 2026-11-17; Plus plan has no API credit).
+  # Comparator: Mu et al. 2025 ("A Closer Look at System Prompt Robustness", arXiv 2502.12197), Table 3, "As-is":
+  # utility under attack 24.85 % (CI 20.61-29.70), ASR 4.24 % (CI 2.42-6.67), "easiest (difficulty 1) tasks".
+  # Setup taken from their AgentDojo fork (normster/agentdojo @ d8477eaf): prompt-based LocalLLM, temperature 0,
+  # top-p 0.9, default benchmark v1.1.2. Difficulty-1 user tasks x injection tasks on all four suites of v1.1.2 =
+  # 330 cases, and 82/330 = 24.85 %, 14/330 = 4.24 % match their numbers exactly. Attack not named in the paper:
+  # important_instructions (AgentDojo's standard attack) is assumed.
+  benchmark_version: v1.1.2
   suites: [workspace, travel, banking, slack]
+  difficulty: easy
   attack: important_instructions
-  llm: {provider: openai, model: gpt-4o-mini-2024-07-18}
+  llm: {model: ots-llama3.1-8b-16k, ollama_base: "llama3.1:8b", num_ctx: 16384, base_url: "http://localhost:11434/v1"}
 G3:   # InjecAgent Table 3 reports prompted Mistral-7B (base setting) -> comparable model
   setting: base
   llm: {model: ots-mistral-7b-v02-8k, ollama_base: "mistral:7b-instruct-v0.2-q4_K_M", num_ctx: 8192, base_url: "http://localhost:11434/v1", max_tokens: 512}

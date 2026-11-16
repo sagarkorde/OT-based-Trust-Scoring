@@ -242,3 +242,26 @@ def test_g3_redoes_cases_simulated_by_another_model(tmp_path, monkeypatch):
     assert len(df) == 1054 and len(seen) == 1054 - 1      # everything but the cached case ds|1 was (re)done
     last = json.loads((tmp_path / "summary.jsonl").read_text().splitlines()[-1])
     assert last["simulator"] == "fixed-sim" and last["cases_with_repeat_abort"] == 0
+
+
+def test_local_llm_sends_tool_results_as_plain_text():
+    import agentdojo.agent_pipeline.llms.local_llm as L
+    from agentdojo.functions_runtime import FunctionCall, FunctionsRuntime
+    from agentdojo.types import (ChatSystemMessage, ChatToolResultMessage, ChatUserMessage,
+                                 text_content_block_from_string)
+
+    from wts.agentdojo_hook import text_tool_results_local_llm
+    sent = {}
+    orig = L.chat_completion_request
+    L.chat_completion_request = lambda client, model, messages, temperature, top_p: sent.setdefault("m", messages) and "Done."
+    try:
+        llm = text_tool_results_local_llm(None, "m")
+        msgs = [ChatSystemMessage(role="system", content=[text_content_block_from_string("sys")]),
+                ChatUserMessage(role="user", content=[text_content_block_from_string("hi")]),
+                ChatToolResultMessage(role="tool", content=[text_content_block_from_string("- balance: 10")],
+                                      tool_call_id="1", tool_call=FunctionCall(function="f", args={}), error=None)]
+        _, _, _, out, _ = llm.query("hi", FunctionsRuntime([]), messages=msgs)
+    finally:
+        L.chat_completion_request = orig
+    assert sent["m"][2] == {"role": "tool", "content": '{"result": "- balance: 10"}'}   # as in normster/agentdojo
+    assert out[:3] == msgs and out[3]["role"] == "assistant"                              # trajectory untouched

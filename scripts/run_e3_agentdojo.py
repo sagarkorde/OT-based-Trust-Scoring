@@ -239,7 +239,8 @@ def make_llm(lc):
         llm = OpenAILLM(openai.OpenAI(), lc["model"])
         llm.name = lc["model"]
     else:
-        llm = LocalLLM(openai.OpenAI(base_url=lc["base_url"], api_key="EMPTY"), lc["model"])
+        from wts.agentdojo_hook import text_tool_results_local_llm
+        llm = text_tool_results_local_llm(openai.OpenAI(base_url=lc["base_url"], api_key="EMPTY"), lc["model"])
         llm.name = f"local-{lc['model'].split('/')[-1]}"
     return llm
 
