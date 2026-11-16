@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -97,7 +98,12 @@ def g2(c):
 
 def _g2(c, logdir, ProgressElement, count_logged, make_llm, build_pipeline, load_attack, get_suite,
         benchmark_suite_with_injections, benchmark_suite_without_injections):
+    if c["llm"].get("provider") == "openai" and not os.environ.get("OPENAI_API_KEY"):
+        sys.exit("G2 needs an OpenAI API key: run  setx OPENAI_API_KEY \"<your key>\"  in PowerShell, close the window, "
+                 "open a new one and run the gate again. (Never paste the key into a chat or a file in the repo.)")
     llm = make_llm(c["llm"])
+    print(f"[G2] model {c['llm']['model']}, AgentDojo benchmark {c['benchmark_version']}, attack {c['attack']}",
+          flush=True)
     tag = tag_of(c, GATE_VERSION["G2"])
     rows = []
     for sname in c["suites"]:

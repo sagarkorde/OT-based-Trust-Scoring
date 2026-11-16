@@ -1,4 +1,5 @@
 """Offline tests of the paper tooling and of E2 control flow (no network, no GPU)."""
+import re
 import importlib.util
 import sys
 from pathlib import Path
@@ -40,7 +41,8 @@ def test_gate_check_blocks_until_all_gates_pass(tmp_path):
     status = gc.gate_status((REPO / "reproduction.md").read_text())
     assert set(status) == {"G1", "G2", "G3", "G4"} and not gc.all_pass(status)
     assert status["G1"] == "PASS" and status["G4"] == "PASS"                 # bold markdown is read as PASS
-    passed = (REPO / "reproduction.md").read_text().replace("| NOT RUN |", "| PASS |")
+    md = (REPO / "reproduction.md").read_text()
+    passed = re.sub(r"\| (NOT RUN|PENDING[^|]*) \|", "| PASS |", md)
     assert gc.all_pass(gc.gate_status(passed))
 
 

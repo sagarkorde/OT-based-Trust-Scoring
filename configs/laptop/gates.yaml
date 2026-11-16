@@ -7,11 +7,14 @@ G1:   # PoisonedRAG reports LLaMA-2-7B among its LLMs -> comparable model
   adv_per_query: 5
   n_targets: 100
   llm: {model: ots-llama2-7b-4k, ollama_base: "llama2:7b-chat", num_ctx: 4096, base_url: "http://localhost:11434/v1", max_tokens: 150}
-G2:   # no 8 GB-sized model on the AgentDojo leaderboard: measured for the record, gap must be explained
-  benchmark_version: v1.2.2
+G2:   # AgentDojo results table (docs/results-table.html, pinned commit 089ed468): openai gpt-4o-mini-2024-07-18,
+  # defense None, important_instructions, 2024-07-19 -> utility 68.04 %, utility under attack 49.92 %, targeted ASR
+  # 27.19 %. That row predates benchmark v1.1, so it was run on v1: reproduce on v1. No 8 GB-sized local model is on
+  # the table, hence the API model (authors' decision 2026-11-16). Needs OPENAI_API_KEY; uses no local GPU.
+  benchmark_version: v1
   suites: [workspace, travel, banking, slack]
   attack: important_instructions
-  llm: {model: ots-llama3.1-8b-16k, ollama_base: "llama3.1:8b", num_ctx: 16384, base_url: "http://localhost:11434/v1"}
+  llm: {provider: openai, model: gpt-4o-mini-2024-07-18}
 G3:   # InjecAgent Table 3 reports prompted Mistral-7B (base setting) -> comparable model
   setting: base
   llm: {model: ots-mistral-7b-v02-8k, ollama_base: "mistral:7b-instruct-v0.2-q4_K_M", num_ctx: 8192, base_url: "http://localhost:11434/v1", max_tokens: 512}
