@@ -265,3 +265,38 @@ def test_local_llm_sends_tool_results_as_plain_text():
         L.chat_completion_request = orig
     assert sent["m"][2] == {"role": "tool", "content": '{"result": "- balance: 10"}'}   # as in normster/agentdojo
     assert out[:3] == msgs and out[3]["role"] == "assistant"                              # trajectory untouched
+
+
+def test_g2_runs_end_to_end_and_resumes(tmp_path, monkeypatch):
+    """Whole G2 gate on one suite with a fake agent: benign + attack runs, CSV, summary, then a resume that
+    re-runs nothing."""
+    from agentdojo.agent_pipeline.base_pipeline_element import BasePipelineElement
+    from agentdojo.functions_runtime import EmptyEnv
+    from agentdojo.types import ChatAssistantMessage, text_content_block_from_string
+
+    import run_e3_agentdojo as E3
+    spec = importlib.util.spec_from_file_location("run_gates", REPO / "scripts/run_gates.py")
+    G = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(G)
+    monkeypatch.setattr(G, "OUT", tmp_path / "gates")
+    monkeypatch.setattr(G, "REPO", tmp_path)
+
+    class Fake(BasePipelineElement):
+        name = "local-fake"
+        calls = 0
+
+        def query(self, query, runtime, env=EmptyEnv(), messages=[], extra_args={}):
+            Fake.calls += 1
+            m = ChatAssistantMessage(role="assistant", content=[text_content_block_from_string("ok")], tool_calls=None)
+            return query, runtime, env, [*messages, m], extra_args
+    monkeypatch.setattr(E3, "make_llm", lambda lc: Fake())
+    cfg = dict(benchmark_version="v1.1.2", suites=["slack"], difficulty="easy", attack="important_instructions",
+               llm={"model": "fake"})
+    G.g2(cfg)
+    n = Fake.calls
+    df = pd.read_csv(tmp_path / "gates" / "G2.csv")
+    assert (df.attack == "important_instructions").sum() == 3 * 5 and (df.attack == "none").sum() == 3
+    last = json.loads((tmp_path / "gates" / "summary.jsonl").read_text().splitlines()[-1])
+    assert last["gate"] == "G2" and last["n_cases"] == 15
+    G.g2(cfg)
+    assert Fake.calls == n                       # resumed entirely from AgentDojo's logs
