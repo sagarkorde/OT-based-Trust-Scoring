@@ -11,7 +11,7 @@ table/figure number is written next to the value. Never fill it from memory. Lea
 | G1 | PoisonedRAG ASR, NQ | Black-box attack (released adversarial texts), N = 5 passages per question, Contriever, top-k = 5, dot product, 100 target questions; LLM LLaMA-2-7B (laptop: Ollama llama2:7b-chat Q4) | 0.97 (PoisonedRAG [14], Table 1, NQ black-box, LLaMa-2-7B) | — | — | — | NOT RUN | Paper uses temperature 0.1 (we use 0) and fp16 weights (we use Q4); ASR by substring match as in the paper |
 | G2 | AgentDojo targeted ASR and utility, no defense | `important_instructions` attack, all 4 suites, benchmark v1.2.2 | TO FILL — no model that fits 8 GB is reported; needs an API model (e.g. gpt-4o-mini) or an explained gap signed off by the authors | — | — | — | NOT RUN | Laptop run with Llama 3.1 8B Q4 is recorded for the paper but has no published comparator |
 | G3 | InjecAgent ASR-valid, base setting | Prompted (ReAct) agent, DH and DS, InjecAgent's own evaluator; laptop: Ollama mistral:7b-instruct-v0.2 Q4, 8k context | 16.7 % (InjecAgent [22], Table 3, prompted Mistral-7B, base setting, Total) | — | — | — | NOT RUN | Check which Mistral-7B release the paper used (appendix model list) before comparing |
-| G4 | HarmBench ASR, DirectRequest | 200 standard text behaviours (all splits), HarmBench Llama-2-13B classifier (bf16, CPU on laptop); model Mistral 7B Instruct v0.2 (laptop: Ollama Q4) | 46.0 % (HarmBench [10], Table 6, standard behaviours, all splits, DR, Mistral 7B); test split only: 44.7 % (Table 7) | — | — | — | NOT RUN | HarmBench lists Mistral 7B as Mistral 7B Instruct v0.2 (Appendix C.2) |
+| G4 | HarmBench ASR, DirectRequest | 200 standard text behaviours (all splits), HarmBench Llama-2-13B classifier (bf16, CPU on laptop); model Mistral 7B Instruct v0.2 (laptop: Ollama Q4) | 46.0 % (HarmBench [10], Table 6, standard behaviours, all splits, DR, Mistral 7B); test split only: 44.7 % (Table 7) | 42.0 % (84/200; 95 % CI 35.4-48.9) | 1 (temperature 0) | −4.0 | **PASS** | HarmBench lists Mistral 7B as Mistral 7B Instruct v0.2 (Appendix C.2) |
 
 ## Sources of published values (read 2026-11-15)
 
@@ -39,3 +39,11 @@ Append one entry per attempt: date, gate, command, commit hash, result, explanat
   tolerance). Temperature (0) and output budget (512) match the paper. Status: **awaiting author decision**
   (accept as explained gap, or run the sensitivity checks: Mistral-7B-Instruct-v0.1, and the 11 cases
   re-simulated another way).
+
+- 2026-11-16 12:15 · G4 · `run.ps1 gates G4` · generations from the 2026-11-15 run (commit 7979197), judged at
+  commit 672e6d5 over three sessions (resumed; judge journal has 200 unique behaviours, no duplicates) ·
+  Mistral-7B-Instruct-v0.2 (Ollama Q4_K_M, temperature 0, 512 new tokens), DirectRequest, 200 standard text
+  behaviours, judge cais/HarmBench-Llama-2-13b-cls in bf16 on CPU with HarmBench's own classifier prompt (peak RSS
+  25.7 GiB) · ASR **42.0 %** (84/200; Wilson 95 % CI 35.4-48.9) vs published 46.0 % (Table 6) · diff −4.0 ·
+  **PASS** (inside ±5; the published value lies inside the CI). ASR recomputed independently from G4.csv.
+  First attempt crashed before judging (missing sentencepiece/protobuf, fixed in acfc1c0); no item was judged twice.
