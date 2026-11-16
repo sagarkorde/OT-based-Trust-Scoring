@@ -106,7 +106,18 @@ def count_logged(logdir: Path, pipeline_name: str, suite: str, attack: str, pref
     prefix 'user_task' counts user-task runs; 'injection_task' counts the benign runs of injection tasks that
     AgentDojo does before an attack (to check that each injection goal is achievable)."""
     base = Path(logdir) / pipeline_name / suite
-    return sum(1 for _ in base.glob(f"{prefix}*/{attack}/*.json")) if base.exists() else 0
+    return sum(1 for f in base.glob(f"{prefix}*/{attack}/*.json") if _finished(f)) if base.exists() else 0
+
+
+def _finished(path: Path) -> bool:
+    """AgentDojo also writes a log when a task is interrupted (API error, Ctrl+C): that log has no utility/security,
+    AgentDojo re-runs the task on the next start, and it must not be counted as done."""
+    import json
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(d.get("utility"), bool) and isinstance(d.get("security"), bool)
 
 
 def reset_for_attack(pe, label, logdir, pipeline_name, suite, attack, aname, n_user):
@@ -129,7 +140,7 @@ def harvest_calibration(logdir: Path, pipeline_name: str, suite_name: str, user_
     for uid in user_ids:
         try:
             res = load_task_results(pipeline_name, suite_name, uid, "none", "none", logdir)
-        except FileNotFoundError:
+        except (FileNotFoundError, ValueError):   # ValueError covers pydantic's ValidationError: interrupted task
             continue
         steps = []
         for m in res.messages:

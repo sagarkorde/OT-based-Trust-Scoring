@@ -82,6 +82,12 @@ def test_agentdojo_resume_reloads_finished_tasks_and_calibration_reads_logs(tmp_
         benchmark_suite_without_injections(pipe, suite, tmp_path, False, user_tasks=tasks, benchmark_version="v1.2.2")
     first_calls = FakeLLM.calls
     assert first_calls >= 6 and E3.count_logged(tmp_path, pipe.name, "banking", "none") == 3
+    # a task interrupted by an API error leaves a log without utility/security: not counted, not harvested
+    broken = tmp_path / pipe.name / "banking" / "user_task_99" / "none" / "none.json"
+    broken.parent.mkdir(parents=True)
+    broken.write_text('{"suite_name": "banking", "messages": [], "error": null, "duration": 0.1}')
+    assert E3.count_logged(tmp_path, pipe.name, "banking", "none") == 3
+    assert E3.harvest_calibration(tmp_path, pipe.name, "banking", ["user_task_99"]) == ({}, [])
 
     pe.reset("second run", len(tasks), E3.count_logged(tmp_path, pipe.name, "banking", "none"))
     with QuietLogger(tmp_path):

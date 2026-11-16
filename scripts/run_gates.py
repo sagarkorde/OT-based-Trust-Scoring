@@ -91,9 +91,19 @@ def g2(c):
     from run_e3_agentdojo import ProgressElement, count_logged, make_llm, reset_for_attack
     from wts.agentdojo_hook import QuietLogger, build_pipeline
     logdir = REPO / "results/agentdojo_logs"
-    with QuietLogger(logdir):          # AgentDojo saves each task's trajectory only inside a logger context
-        _g2(c, logdir, ProgressElement, count_logged, make_llm, build_pipeline, load_attack, get_suite,
-            benchmark_suite_with_injections, benchmark_suite_without_injections)
+    try:
+        with QuietLogger(logdir):      # AgentDojo saves each task's trajectory only inside a logger context
+            _g2(c, logdir, ProgressElement, count_logged, make_llm, build_pipeline, load_attack, get_suite,
+                benchmark_suite_with_injections, benchmark_suite_without_injections)
+    except Exception as e:             # account problems: say what to fix instead of a long traceback
+        msg = str(e)
+        if "no credits" in msg or "insufficient_quota" in msg:
+            sys.exit("[G2] stopped: the OpenAI API organization of this key has no credits. Claim the ChatGPT Pro API "
+                     "credits for that organization (or add credit) at platform.openai.com > Settings > Billing, then "
+                     "re-run. Nothing finished is lost; the interrupted task is redone.")
+        if "invalid_api_key" in msg or "Incorrect API key" in msg:
+            sys.exit("[G2] stopped: OpenAI rejected the API key. Create a new key and set OPENAI_API_KEY again.")
+        raise
 
 
 def _g2(c, logdir, ProgressElement, count_logged, make_llm, build_pipeline, load_attack, get_suite,
