@@ -10,7 +10,7 @@ table/figure number is written next to the value. Never fill it from memory. Lea
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | G1 | PoisonedRAG ASR, NQ | Black-box attack (released adversarial texts), N = 5 passages per question, Contriever, top-k = 5, dot product, 100 target questions; LLM LLaMA-2-7B (laptop: Ollama llama2:7b-chat Q4) | 0.97 (PoisonedRAG [14], Table 1, NQ black-box, LLaMa-2-7B) | 0.96 (96/100; 95 % CI 0.90-0.98) | 1 (temperature 0) | −0.01 | **PASS** | Paper uses temperature 0.1 (we use 0) and fp16 weights (we use Q4); ASR by substring match as in the paper |
 | G2 | AgentDojo utility under attack and ASR, no defense | Llama 3.1 8B Instruct (Ollama Q4_K_M, local), prompt-based LocalLLM (temperature 0, top-p 0.9), benchmark v1.1.2, difficulty-1 user tasks of all 4 suites (330 cases), `important_instructions` (assumed) | Utility under attack 24.85 % (20.61-29.70), ASR 4.24 % (2.42-6.67) (Mu et al. 2025, arXiv 2502.12197, Table 3, Llama 3.1 8B Instruct "As-is"; setup from their fork normster/agentdojo @ d8477eaf) | — | — | — | NOT RUN | Attack name not stated in the paper; n = 330 inferred and confirmed (82/330 and 14/330 reproduce both percentages). They served bf16 with vLLM; we use Q4 |
-| G3 | InjecAgent ASR-valid, base setting | Prompted (ReAct) agent, DH and DS, InjecAgent's own evaluator; laptop: Ollama mistral:7b-instruct-v0.2 Q4, 8k context | 16.7 % (InjecAgent [22], Table 3, prompted Mistral-7B, base setting, Total) | 22.1 % (v0.2; sensitivity run with v0.1 pending) | 1 (temperature 0) | +5.4 | PENDING (sensitivity check) | Check which Mistral-7B release the paper used (appendix model list) before comparing |
+| G3 | InjecAgent ASR-valid, base setting | Prompted (ReAct) agent, DH and DS, InjecAgent's own evaluator; laptop: Ollama mistral:7b-instruct-v0.2 Q4, 8k context | 16.7 % (InjecAgent [22], Table 3, prompted Mistral-7B, base setting, Total) | 16.0 % with v0.1 (127/792 valid; 95 % CI 13.6-18.8) · 22.1 % with v0.2 | 1 (temperature 0) | −0.7 (v0.1) / +5.4 (v0.2) | **PASS** (v0.1) | Check which Mistral-7B release the paper used (appendix model list) before comparing |
 | G4 | HarmBench ASR, DirectRequest | 200 standard text behaviours (all splits), HarmBench Llama-2-13B classifier (bf16, CPU on laptop); model Mistral 7B Instruct v0.2 (laptop: Ollama Q4) | 46.0 % (HarmBench [10], Table 6, standard behaviours, all splits, DR, Mistral 7B); test split only: 44.7 % (Table 7) | 42.0 % (84/200; 95 % CI 35.4-48.9) | 1 (temperature 0) | −4.0 | **PASS** | HarmBench lists Mistral 7B as Mistral 7B Instruct v0.2 (Appendix C.2) |
 
 ## Sources of published values (read 2026-11-15)
@@ -76,4 +76,13 @@ Append one entry per attempt: date, gate, command, commit hash, result, explanat
   found and removed: the pinned LocalLLM serialises tool results as content-block lists, the fork as plain text
   (wts.agentdojo_hook.text_tool_results_local_llm, also used by E3). Assumption to report: the attack
   (important_instructions) is not named in the paper.
+
+- 2026-11-17 00:55 · G3_v01 (sensitivity check) · resumed at commit a525235 (763/1054 kept, 2 cases redone because
+  v0.1 had simulated their attacker response) · Mistral-7B-Instruct-v0.1 (TheBloke Q4_K_M GGUF, v0.2 chat template),
+  attacker-response simulator for DS cache misses = v0.2 as in G3 · ASR-valid **16.0 %** (127/792 valid cases;
+  Wilson 95 % CI 13.6-18.8; DH 15.4 %, DS 16.8 %; valid rate 75.1 %) vs published 16.7 % · diff −0.7 · inside ±5.
+  7 DS step-2 responses were simulated locally (5 valid, 4 succ); counting those 4 as failures gives 15.5 %, still
+  inside. No repeat-limit aborts. Recomputed independently from G3_v01.csv.
+  Conclusion recorded by the authors: InjecAgent's unnamed "Mistral-7B" behaves like Instruct v0.1 (−0.7) rather
+  than v0.2 (+5.4); G3 is marked PASS on v0.1 and both numbers are reported in the paper as release sensitivity.
 
