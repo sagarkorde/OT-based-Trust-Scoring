@@ -59,3 +59,12 @@ Append one entry per attempt: date, gate, command, commit hash, result, explanat
   from the v0.2 Ollama model; results in G3_v01.csv, the v0.2 results stay as recorded above). G2: run with an
   OpenAI API model (API credits of the authors' ChatGPT Pro subscription); the published comparator is to be read
   from the AgentDojo results table for that exact model snapshot before the run.
+
+- 2026-11-16 22:40 · G3_v01 attempt 1 · stopped after 765/1054 cases (all journaled): Ollama aborted a reply with
+  "token repeat limit reached" (one token repeated > 30 times) while Mistral-7B-Instruct-v0.1 simulated an attacker
+  tool response for a DS cache miss. Changes before resuming: (a) the simulator for cache misses is fixed to the G3
+  run's model (v0.2), so G3 and G3_v01 differ only in the agent model; cases already simulated by v0.1 are redone;
+  (b) a repeat-limit abort no longer crashes the run: the reply is streamed and the text produced before the abort
+  is scored (other servers would return the same text followed by the repeated token up to max_tokens). Cases with
+  such an abort are flagged and counted in the summary (`cases_with_repeat_abort`).
+

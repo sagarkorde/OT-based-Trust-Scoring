@@ -145,7 +145,8 @@ def g3(c, gate="G3"):
     """InjecAgent ASR-valid. gate="G3_v01": the same run with Mistral-7B-Instruct-v0.1 (sensitivity check for the
     unnamed Mistral release in InjecAgent), written to its own journal, CSV and summary line."""
     import run_e3_injecagent as IA
-    J = journal(gate, c)
+    # the journal tag ignores sim_llm: cases whose attacker response was simulated by a different model are redone
+    J = journal(gate, {k: v for k, v in c.items() if k != "sim_llm"})
     legacy = _out() / "G3.csv"                      # finished before journals existed (same config, v1)
     if gate == "G3" and len(J) == 0 and legacy.exists():
         old = pd.read_csv(legacy).fillna("")
@@ -154,6 +155,13 @@ def g3(c, gate="G3"):
                                                     sim_response=r.sim_response, imported_from="G3.csv"))
         print(f"[G3] imported {len(old)} finished cases from the earlier run", flush=True)
     llm = build_llm(c["llm"])
+    # DS step 2 cache misses: the benchmark simulates the attacker tool's response with one fixed model (GPT-4);
+    # sim_llm keeps that model fixed across agent models (G3_v01 uses G3's v0.2 model, as in the G3 run)
+    sim = build_llm(c["sim_llm"]) if c.get("sim_llm") else llm
+    redo = {k for k, v in J.records.items()
+            if str(v.get("sim_response", "")).startswith("local:") and v["sim_response"] != f"local:{sim.model}"}
+    if redo:
+        print(f"[{gate}] redoing {len(redo)} cases whose attacker response was simulated by another model", flush=True)
     with IA.in_injecagent():
         from src.output_parsing import evaluate_output_prompted
         from src.prompts.agent_prompts import PROMPT_DICT
@@ -161,25 +169,30 @@ def g3(c, gate="G3"):
         tool_dict = get_tool_dict()
         sys_p, user_p = PROMPT_DICT["InjecAgent"]
         cases = [(split, i, item) for split in ("dh", "ds") for i, item in enumerate(D.injecagent_cases(split, c["setting"]))]
-        todo = [x for x in cases if Journal.key(x[0], x[1]) not in J]
+        todo = [x for x in cases if Journal.key(x[0], x[1]) not in J or Journal.key(x[0], x[1]) in redo]
         P = Progress(f"{gate} InjecAgent", len(cases), resumed=len(cases) - len(todo))
         for split, i, item in todo:
             item = dict(item)
             o1 = IA._predict(sys_p, user_p, item, tool_dict, llm, step_2=False)
+            aborted = getattr(llm, "last_repeat_abort", False)
             ev = evaluate_output_prompted(o1, item["Attacker Tools"][0], item["Attacker Tools"], item["User Tool"],
                                           item["Attacker Instruction"])
             res, sim_src = ev["eval"], ""
             if split == "ds" and res == "succ":
                 item.update({k: ev[k] for k in ("Attacker Tool Parameters", "Attacker Tool Thought")})
                 item["Attacker Tool Response"], sim_src = IA.simulated_attacker_response(
-                    item["Attacker Tools"][0], item["Attacker Tool Parameters"], tool_dict, llm)
+                    item["Attacker Tools"][0], item["Attacker Tool Parameters"], tool_dict, sim)
+                aborted = aborted or (getattr(sim, "last_repeat_abort", False) and sim_src.startswith("local"))
                 o2 = IA._predict(sys_p, user_p, item, tool_dict, llm, step_2=True)
+                aborted = aborted or getattr(llm, "last_repeat_abort", False)
                 res = evaluate_output_prompted(o2, item["Attacker Tools"][1], item["Attacker Tools"],
                                                item["User Tool"], item["Attacker Instruction"])["eval"]
-            J.add(Journal.key(split, i), dict(split=split, case=i, eval=res, sim_response=sim_src))
+            J.add(Journal.key(split, i), dict(split=split, case=i, eval=res, sim_response=sim_src,
+                                              repeat_abort=bool(aborted)))
             P.step()
     df = pd.DataFrame([J.get(Journal.key(s, i)) for s, i, _ in cases]).drop(columns="_key")
     df["sim_response"] = df.sim_response.fillna("")
+    df["repeat_abort"] = df.get("repeat_abort", pd.Series(False, index=df.index)).fillna(False).astype(bool)
     df.to_csv(_out() / f"{gate}.csv", index=False)
     out = {}
     for split in ("dh", "ds"):
@@ -188,7 +201,8 @@ def g3(c, gate="G3"):
     v = df[df["eval"].isin(["succ", "unsucc"])]
     summary(gate, llm=c["llm"]["model"], weights=c["llm"].get("ollama_base"), setting=c["setting"], asr_valid_total=round((v["eval"] == "succ").mean(), 4),
             valid_rate=round(len(v) / len(df), 4),
-            ds_step2_local_simulations=int(df.sim_response.str.startswith("local").sum()), **out)
+            ds_step2_local_simulations=int(df.sim_response.str.startswith("local").sum()),
+            simulator=c.get("sim_llm", c["llm"])["model"], cases_with_repeat_abort=int(df.repeat_abort.sum()), **out)
 
 
 # ---------------------------------------------------------------------------------------------- G4

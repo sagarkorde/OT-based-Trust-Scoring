@@ -223,3 +223,22 @@ def test_g3_sensitivity_gate_writes_its_own_files(tmp_path, monkeypatch):
     assert (tmp_path / "G3.csv").read_text().count("\n") == 2                      # untouched
     last = json.loads((tmp_path / "summary.jsonl").read_text().splitlines()[-1])
     assert last["gate"] == "G3_v01" and last["weights"] == "hf.co/x:Q4_K_M"
+
+
+def test_g3_redoes_cases_simulated_by_another_model(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("run_gates", REPO / "scripts/run_gates.py")
+    G = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(G)
+    monkeypatch.setattr(G, "OUT", tmp_path)
+    cfg = {"setting": "base", "llm": {"model": "agent"}, "sim_llm": {"model": "fixed-sim"}}
+    J = G.journal("G3_v01", {k: v for k, v in cfg.items() if k != "sim_llm"})
+    J.add("ds|0", dict(split="ds", case=0, eval="succ", sim_response="local:agent"))       # simulated by the agent
+    J.add("ds|1", dict(split="ds", case=1, eval="unsucc", sim_response="cache"))
+    seen = []
+    monkeypatch.setattr(G, "build_llm", lambda c: type("L", (), {"model": c["model"],
+                                                                 "chat": lambda self, m, **k: seen.append(1) or "x"})())
+    G.g3(cfg, "G3_v01")
+    df = pd.read_csv(tmp_path / "G3_v01.csv")
+    assert len(df) == 1054 and len(seen) == 1054 - 1      # everything but the cached case ds|1 was (re)done
+    last = json.loads((tmp_path / "summary.jsonl").read_text().splitlines()[-1])
+    assert last["simulator"] == "fixed-sim" and last["cases_with_repeat_abort"] == 0

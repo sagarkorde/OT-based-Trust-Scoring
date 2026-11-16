@@ -20,6 +20,8 @@ class ChatLLM:
     max_tokens: int = 256
     retries: int = 5
     _client: object = field(default=None, repr=False)
+    repeat_aborts: int = 0          # replies Ollama cut short because one token repeated > 30 times in a row
+    last_repeat_abort: bool = False
 
     @property
     def client(self):
@@ -32,15 +34,35 @@ class ChatLLM:
     def chat(self, messages: list[dict], **kw) -> str:
         args = dict(model=self.model, messages=messages, temperature=kw.get("temperature", self.temperature),
                     max_tokens=kw.get("max_tokens", self.max_tokens))
+        self.last_repeat_abort = False
         for attempt in range(self.retries):
             try:
                 r = self.client.chat.completions.create(**args)
                 return r.choices[0].message.content or ""
-            except Exception:
+            except Exception as e:
+                if "token repeat limit" in str(e):
+                    # Ollama stops a reply once the same token has repeated > 30 times in a row; at temperature 0
+                    # the model would keep repeating it up to max_tokens. Retrying gives the same abort, so the
+                    # reply is streamed instead and the text produced before the abort is returned (what other
+                    # servers return, minus the trailing repetitions). Counted, so papers can report it.
+                    self.repeat_aborts += 1
+                    self.last_repeat_abort = True
+                    return self._stream_until_abort(args)
                 if attempt == self.retries - 1:
                     raise
                 time.sleep(2 ** attempt)
         return ""
+
+    def _stream_until_abort(self, args: dict) -> str:
+        parts = []
+        try:
+            for ch in self.client.chat.completions.create(**args, stream=True):
+                if ch.choices and ch.choices[0].delta and ch.choices[0].delta.content:
+                    parts.append(ch.choices[0].delta.content)
+        except Exception as e:
+            if "token repeat limit" not in str(e):
+                raise
+        return "".join(parts)
 
     def ask(self, prompt: str, system: str | None = None, **kw) -> str:
         msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]

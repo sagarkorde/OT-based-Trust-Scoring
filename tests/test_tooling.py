@@ -126,3 +126,30 @@ def test_poisonedrag_passages_carry_the_question_prefix_like_the_benchmark():
     assert adv[0] == t["question"] + "." + t["adv_texts"][0]   # = PoisonedRAG src/attack.py get_attack
     e2 = _load("run_e2_rag")
     assert e2.attack_texts("poisonedrag_blackbox", dict(t), dict(adv_per_query=5), []) == adv
+
+
+def test_ollama_repeat_abort_returns_text_before_the_abort():
+    """Ollama answers 500 'token repeat limit reached' when one token repeats > 30 times; the client keeps what the
+    model wrote before that (streamed) instead of crashing, and counts it."""
+    from types import SimpleNamespace as NS
+
+    from wts.llm import ChatLLM
+    err = RuntimeError("Error code: 500 - prediction aborted, token repeat limit reached")
+
+    class Completions:
+        calls = 0
+
+        def create(self, stream=False, **kw):
+            Completions.calls += 1
+            if not stream:
+                raise err
+
+            def gen():
+                for t in ["Thought: ok\n", "Action: Tool\n", "\n"]:
+                    yield NS(choices=[NS(delta=NS(content=t))])
+                raise err
+            return gen()
+    llm = ChatLLM(model="m", base_url="http://x/v1")
+    llm._client = NS(chat=NS(completions=Completions()))
+    assert llm.chat([{"role": "user", "content": "hi"}]) == "Thought: ok\nAction: Tool\n\n"
+    assert llm.repeat_aborts == 1 and llm.last_repeat_abort and Completions.calls == 2   # no 5x retries
