@@ -300,3 +300,25 @@ def test_g2_runs_end_to_end_and_resumes(tmp_path, monkeypatch):
     assert last["gate"] == "G2" and last["n_cases"] == 15
     G.g2(cfg)
     assert Fake.calls == n                       # resumed entirely from AgentDojo's logs
+
+
+def test_g2_diagnosis_counts_unreadable_calls_and_timeouts(tmp_path):
+    import subprocess
+    base = tmp_path / "logs" / "local-ots-llama3.1-8b-16k-gate-abc" / "banking"
+
+    def log(ut, it, utility, msgs, dur):
+        f = base / ut / "important_instructions" / f"{it}.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(dict(suite_name="banking", user_task_id=ut, injection_task_id=it, utility=utility,
+                                     security=False, duration=dur, messages=msgs)))
+        return f
+    A = lambda t, calls=None: {"role": "assistant", "content": [{"type": "text", "content": t}], "tool_calls": calls}
+    log("user_task_0", "injection_task_0", True, [A("x", [{"function": "f", "args": {}}]), A("done")], 30)
+    log("user_task_1", "injection_task_0", False, [A('<function=f>{"a": 1}<function>')], 40)    # unreadable call
+    timed = log("user_task_2", "injection_task_0", False, [A("")], 640)                          # timed out
+    r = subprocess.run([sys.executable, str(REPO / "scripts/g2_diagnose.py"), "--logdir", str(tmp_path / "logs"),
+                        "--retry-timeouts", "--out", str(tmp_path / "d.csv")], capture_output=True, text=True)
+    print(r.stdout)
+    assert r.returncode == 0, r.stderr
+    assert "3 attack cases" in r.stdout and "unreadable call  1/3" in r.stdout and "hit the timeout     1" in r.stdout
+    assert not timed.exists() and (tmp_path / "logs" / "_retried").exists()

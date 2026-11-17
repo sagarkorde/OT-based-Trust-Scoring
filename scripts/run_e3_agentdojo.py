@@ -240,7 +240,10 @@ def make_llm(lc):
         llm.name = lc["model"]
     else:
         from wts.agentdojo_hook import text_tool_results_local_llm
-        llm = text_tool_results_local_llm(openai.OpenAI(base_url=lc["base_url"], api_key="EMPTY"), lc["model"])
+        # AgentDojo's LocalLLM turns any request error into an empty reply, so a timeout silently fails the task:
+        # allow 30 min per request (the OpenAI client default is 10 min; long agent contexts on a laptop GPU exceed it)
+        llm = text_tool_results_local_llm(openai.OpenAI(base_url=lc["base_url"], api_key="EMPTY", timeout=1800),
+                                          lc["model"])
         llm.name = f"local-{lc['model'].split('/')[-1]}"
     return llm
 

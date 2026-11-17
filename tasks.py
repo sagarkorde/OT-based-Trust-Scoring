@@ -89,6 +89,11 @@ def main():
         run(s("bench_latency.py", "--device", dev, "--out", "results/e5_overhead.csv"), env, log)
     elif t == "gates":
         run(s("run_gates.py", "--config", f"{C}/gates.yaml", *(["--only", *a.only] if a.only else [])), env, log)
+    elif t == "g2-diagnose":       # reads the saved G2 trajectories; no model calls
+        run(s("g2_diagnose.py"), env, log)
+    elif t == "g2-retry":          # redo only the G2 cases whose request timed out, then rescore G2
+        run(s("g2_diagnose.py", "--retry-timeouts"), env, log)
+        run(s("run_gates.py", "--config", f"{C}/gates.yaml", "--only", "G2"), env, log)
     elif t == "gate-check":
         gated()
     elif t == "e1":

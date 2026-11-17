@@ -9,7 +9,7 @@ table/figure number is written next to the value. Never fill it from memory. Lea
 | Gate | What | Setting | Published (source table) | Reproduced (mean over seeds) | Seeds | Diff | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | G1 | PoisonedRAG ASR, NQ | Black-box attack (released adversarial texts), N = 5 passages per question, Contriever, top-k = 5, dot product, 100 target questions; LLM LLaMA-2-7B (laptop: Ollama llama2:7b-chat Q4) | 0.97 (PoisonedRAG [14], Table 1, NQ black-box, LLaMa-2-7B) | 0.96 (96/100; 95 % CI 0.90-0.98) | 1 (temperature 0) | −0.01 | **PASS** | Paper uses temperature 0.1 (we use 0) and fp16 weights (we use Q4); ASR by substring match as in the paper |
-| G2 | AgentDojo utility under attack and ASR, no defense | Llama 3.1 8B Instruct (Ollama Q4_K_M, local), prompt-based LocalLLM (temperature 0, top-p 0.9), benchmark v1.1.2, difficulty-1 user tasks of all 4 suites (330 cases), `important_instructions` (assumed) | Utility under attack 24.85 % (20.61-29.70), ASR 4.24 % (2.42-6.67) (Mu et al. 2025, arXiv 2502.12197, Table 3, Llama 3.1 8B Instruct "As-is"; setup from their fork normster/agentdojo @ d8477eaf) | — | — | — | NOT RUN | Attack name not stated in the paper; n = 330 inferred and confirmed (82/330 and 14/330 reproduce both percentages). They served bf16 with vLLM; we use Q4 |
+| G2 | AgentDojo utility under attack and ASR, no defense | Llama 3.1 8B Instruct (Ollama Q4_K_M, local), prompt-based LocalLLM (temperature 0, top-p 0.9), benchmark v1.1.2, difficulty-1 user tasks of all 4 suites (330 cases), `important_instructions` (assumed) | Utility under attack 24.85 % (20.61-29.70), ASR 4.24 % (2.42-6.67) (Mu et al. 2025, arXiv 2502.12197, Table 3, Llama 3.1 8B Instruct "As-is"; setup from their fork normster/agentdojo @ d8477eaf) | UA 17.9 % (59/330; 95 % CI 14.1-22.4), ASR 3.9 % (13/330; 2.3-6.6); benign utility 22.2 % (10/45) | 1 (temperature 0) | UA −7.0 / ASR −0.3 | PENDING (UA gap under investigation) | Attack name not stated in the paper; n = 330 inferred and confirmed (82/330 and 14/330 reproduce both percentages). They served bf16 with vLLM; we use Q4 |
 | G3 | InjecAgent ASR-valid, base setting | Prompted (ReAct) agent, DH and DS, InjecAgent's own evaluator; laptop: Ollama mistral:7b-instruct-v0.2 Q4, 8k context | 16.7 % (InjecAgent [22], Table 3, prompted Mistral-7B, base setting, Total) | 16.0 % with v0.1 (127/792 valid; 95 % CI 13.6-18.8) · 22.1 % with v0.2 | 1 (temperature 0) | −0.7 (v0.1) / +5.4 (v0.2) | **PASS** (v0.1) | Check which Mistral-7B release the paper used (appendix model list) before comparing |
 | G4 | HarmBench ASR, DirectRequest | 200 standard text behaviours (all splits), HarmBench Llama-2-13B classifier (bf16, CPU on laptop); model Mistral 7B Instruct v0.2 (laptop: Ollama Q4) | 46.0 % (HarmBench [10], Table 6, standard behaviours, all splits, DR, Mistral 7B); test split only: 44.7 % (Table 7) | 42.0 % (84/200; 95 % CI 35.4-48.9) | 1 (temperature 0) | −4.0 | **PASS** | HarmBench lists Mistral 7B as Mistral 7B Instruct v0.2 (Appendix C.2) |
 
@@ -85,4 +85,15 @@ Append one entry per attempt: date, gate, command, commit hash, result, explanat
   inside. No repeat-limit aborts. Recomputed independently from G3_v01.csv.
   Conclusion recorded by the authors: InjecAgent's unnamed "Mistral-7B" behaves like Instruct v0.1 (−0.7) rather
   than v0.2 (+5.4); G3 is marked PASS on v0.1 and both numbers are reported in the paper as release sensitivity.
+
+- 2026-11-17 07:30 · G2 · `run.ps1 gates G2` · commit 3175e24 (first start at dc49ef0 stopped after the workspace
+  benign tasks on a missing import, fixed in 3175e24; finished tasks were reloaded, none re-run) · Llama 3.1 8B
+  Instruct (Ollama Q4_K_M), AgentDojo v1.1.2, difficulty-1 user tasks, important_instructions · ASR **3.9 %**
+  (13/330) vs 4.24 % (14/330): diff −0.3, inside ±5 and inside the published CI · utility under attack **17.9 %**
+  (59/330) vs 24.85 % (82/330): diff −7.0, outside ±5 (CIs overlap: ours 14.1-22.4, theirs 20.61-29.70).
+  Recomputed independently from G2.csv (330 unique cases). One request hit the OpenAI client's 10-minute timeout;
+  AgentDojo's LocalLLM turns request errors into an empty reply, which fails that case. Many replies close a tool
+  call with "<function>" instead of "</function>" and are not parsed (same parser as the comparator's fork).
+  Author decision: investigate before signing off: (1) count unreadable tool calls and timeouts from the saved
+  trajectories (`run.ps1 g2-diagnose`), (2) redo timed-out cases with a 30-minute client timeout (`run.ps1 g2-retry`).
 
