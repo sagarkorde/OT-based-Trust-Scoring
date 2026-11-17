@@ -97,3 +97,9 @@ Append one entry per attempt: date, gate, command, commit hash, result, explanat
   Author decision: investigate before signing off: (1) count unreadable tool calls and timeouts from the saved
   trajectories (`run.ps1 g2-diagnose`), (2) redo timed-out cases with a 30-minute client timeout (`run.ps1 g2-retry`).
 
+- 2026-11-17 11:43 · G2 investigation (commit 3f277a6) · `run.ps1 g2-diagnose` on the saved trajectories: 81/330
+  attack cases (24.5 %) contain at least one tool call the LocalLLM parser could not read (mostly "<function>" used as
+  the closing tag); utility under attack is 3.7 % in those cases vs 22.5 % in the other 249. Per suite, unreadable
+  calls: workspace 36.4 %, banking 34.0 %, travel 7.6 %, slack 0 %. One case had hit the 10-minute client timeout;
+  `run.ps1 g2-retry` re-ran it with a 30-minute timeout: totals unchanged (UA 59/330, ASR 13/330).
+
