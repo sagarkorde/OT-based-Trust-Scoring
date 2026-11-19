@@ -38,12 +38,14 @@ def test_verify_refs_logic_with_fake_registry():
 
 def test_gate_check_blocks_until_all_gates_pass(tmp_path):
     gc = _load("gate_check")
-    status = gc.gate_status((REPO / "reproduction.md").read_text())
-    assert set(status) == {"G1", "G2", "G3", "G4"} and not gc.all_pass(status)
-    assert status["G1"] == "PASS" and status["G4"] == "PASS"                 # bold markdown is read as PASS
     md = (REPO / "reproduction.md").read_text()
-    passed = re.sub(r"\| (NOT RUN|PENDING[^|]*) \|", "| PASS |", md)
-    assert gc.all_pass(gc.gate_status(passed))
+    status = gc.gate_status(md)
+    assert set(status) == {"G1", "G2", "G3", "G4"}
+    assert status["G1"] == "PASS" and status["G4"] == "PASS"                 # bold markdown is read as PASS
+    assert gc.all_pass(status)                                               # all four gates signed off (2026-11-17)
+    for blocked in ("NOT RUN", "PENDING (under investigation)", "FAIL"):     # any non-PASS status blocks E1-E4
+        one = re.sub(r"(\| G3 \|(?:[^|]*\|){6}) [^|]+ \|", rf"\1 {blocked} |", md, count=1)
+        assert one != md and not gc.all_pass(gc.gate_status(one)), blocked
 
 
 def test_e2_attack_variants():

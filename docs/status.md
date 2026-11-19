@@ -79,8 +79,23 @@ in the JSON log (`hardware` field):
 | RAM | — | hard ceiling 50 GB per run (MemoryGuard) | user's limit |
 | Scope | 3 LLMs, 5 seeds | E1 5 seeds; E2 2 LLMs x 3 seeds; E3 1 LLM x 3 seeds; E4 3 seeds, GCG 15 behaviours x lambda {0, 1} | plan Section 8 drop order (never below 3 seeds; E4 and RQ4 kept) |
 | HarmBench GCG/PAIR/AutoDAN test cases in E1 | yes | no; GCG detection measured in E4 | test-case generation needs GPU-days on large GPUs |
+| E3 agent runs | every (defense, seed, case) run | replay (2026-11-19): seed-free baselines shared by seeds; WTS cases copy the no-defense result when no guard element would act (checked with the elements' own code on the saved trajectory), otherwise run; a random sample of copies is rerun for real (`*_replay_check.csv`) | ~8–9 days of agent runs on this laptop; exact under temperature-0 determinism, which the check measures |
 
 Gates on this hardware: G1 (PoisonedRAG, LLaMA-2-7B: 0.97, Table 1), G3 (InjecAgent, prompted Mistral-7B: 16.7 %,
 Table 3) and G4 (HarmBench DirectRequest, Mistral 7B: 46.0 %, Table 6) have published comparators that fit 8 GB.
 AgentDojo reports no such model, so G2 is measured for the record and can pass only as an explained gap signed off
 by the authors, unless an API model (e.g. gpt-4o-mini with a key) is used for it.
+
+## E3 observations (recorded 2026-11-19, from results/e3; not yet in the manuscript)
+
+- AgentDojo ground-truth tool outputs (benchmark v1.2.2, BGE, 3 seeds): the guard was calibrated on 188 benign
+  tool outputs over ~40 tool types; no tool reached the per-tool minimum (39 calibration outputs at alpha/2), so
+  every output was scored against the pooled `__all__` reference with the length-adjusted Gaussian W2. Pooled
+  AUROC (seed 0) 0.41; per (suite, tool) with both classes, injected outputs score lower than their clean versions
+  in 8 of 14 groups. Not a labelling bug: positives are outputs that contain the injection (line match), negatives
+  are the same tools' outputs in clean runs. Likely mechanism: against a pooled reference of mixed tool formats,
+  appended natural-language instructions make an output more typical, and the length adjustment lowers the score of
+  longer outputs. Reported as a negative result for the tool-output part of H3; any per-tool or unadjusted variant
+  would be exploratory (not pre-registered) and must be labelled so.
+- InjecAgent (base, seed 0): AUROC 0.70, TPR 0.16 at FPR 0.056 (alpha 0.05).
+

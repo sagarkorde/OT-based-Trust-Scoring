@@ -322,3 +322,145 @@ def test_g2_diagnosis_counts_unreadable_calls_and_timeouts(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "3 attack cases" in r.stdout and "unreadable call  1/3" in r.stdout and "hit the timeout     1" in r.stdout
     assert not timed.exists() and (tmp_path / "logs" / "_retried").exists()
+
+
+def test_injecagent_replay_copies_only_identical_prompts(tmp_path, monkeypatch):
+    """Replay: no-defense runs once (seed 0) and is copied to seed 1; with WTS, unflagged cases copy the no-defense
+    result and flagged cases are run. A deterministic stand-in model makes every copy checkable."""
+    import run_e3_injecagent as IA
+    import wts.llm
+    from wts import data as D
+
+    seen = []
+
+    class Stub:
+        model = "stub"
+
+        def chat(self, messages, **kw):
+            user = messages[-1]["content"]
+            seen.append(user)
+            m = re.search(r"tools available to you are: \[([^\]]+)\]", user)
+            if not m:
+                return '```json\n{"result": "simulated"}\n```'
+            tools = re.findall(r"'([^']+)'", m.group(1))
+            if "Data omitted" in user:                       # redacted response: the agent does not follow it
+                return "Thought: nothing to do.\nFinal Answer: done"
+            step2 = len(tools) > 2 and f"Action: {tools[1]}" in user.split("Now begin your task!")[-1]
+            return (f"Thought: I will use the tool now.\nAction: {tools[2] if step2 else tools[1]}\n"
+                    f"Action Input: {{\"x\": \"y\"}}\n")
+    monkeypatch.setattr(wts.llm, "build_llm", lambda c: Stub())
+    cases = {s: D.injecagent_cases(s, "base")[:6] for s in ("dh", "ds")}
+
+    class Guard:                                             # flags cases 0 and 3 of each split
+        alpha = 0.05
+
+        def output_pvalue(self, tool, x):
+            return 0.0, (0.01 if x in ("F",) else 0.5)
+
+    class Enc:
+        def encode(self, text):
+            return "F" if any(text == cases[s][i]["Tool Response"] for s in cases for i in (0, 3)) else "N"
+    cfg = {"alpha": 0.05, "seeds": [0, 1], "injecagent": {
+        "replay": True, "replay_check_n": 4, "llms": [{"model": "stub"}], "defenses": ["none", "wts_output_block"]}}
+    IA.run_agents(cfg, cases, Guard(), Enc(), 0, "base", tmp_path)
+    calls_seed0 = len(seen)
+    IA.run_agents(cfg, cases, Guard(), Enc(), 1, "base", tmp_path)
+    d = pd.read_csv(tmp_path / "injecagent_items.csv")
+    assert len(d) == 2 * 2 * 12 and not d.duplicated(["seed", "defense", "split", "case"]).any()
+    real = d[~d.replayed.astype(bool)]
+    # real runs: no-defense seed 0 (12) + flagged WTS cases (2 per split) for each seed
+    assert len(real[(real.defense == "none")]) == 12 and set(real[real.defense == "none"].seed) == {0}
+    w = d[d.defense == "wts_output_block"]
+    assert (w.replayed == ~w.flagged).all() and w.flagged.sum() == 2 * 2 * 2
+    # copied rows equal the no-defense result of the same case
+    none0 = d[(d.defense == "none") & (d.seed == 0)].set_index(["split", "case"])["eval"]
+    for _, r in d[d.replayed.astype(bool)].iterrows():
+        assert r["eval"] == none0[(r["split"], r["case"])]
+    chk = pd.read_csv(tmp_path / "injecagent_replay_check.csv")
+    assert len(chk) == 4 and chk["match"].all()
+    assert len(seen) > calls_seed0                           # seed 1 ran its flagged cases
+
+
+def test_agentdojo_replay_matches_real_runs(tmp_path, monkeypatch):
+    """Replay on AgentDojo banking with a deterministic stand-in agent: copied WTS rows equal the no-defense rows,
+    cases where the guard acts are run, seed-free pipelines are shared by seeds, determinism check passes."""
+    import contextlib
+    import zlib
+
+    from agentdojo.agent_pipeline.base_pipeline_element import BasePipelineElement
+    from agentdojo.functions_runtime import EmptyEnv, FunctionCall
+    from agentdojo.types import ChatAssistantMessage, text_content_block_from_string
+
+    import run_e3_agentdojo as E3
+
+    calls = {"n": 0}
+
+    class Fake(BasePipelineElement):
+        name = "local-fake"
+
+        def query(self, query, runtime, env=EmptyEnv(), messages=[], extra_args={}):
+            calls["n"] += 1
+            if messages[-1]["role"] == "tool":
+                m = ChatAssistantMessage(role="assistant", content=[text_content_block_from_string("Done.")],
+                                         tool_calls=None)
+            else:
+                m = ChatAssistantMessage(role="assistant", content=[text_content_block_from_string("Checking.")],
+                                         tool_calls=[FunctionCall(function="get_most_recent_transactions",
+                                                                  args={"n": 5}, id="c1")])
+            return query, runtime, env, [*messages, m], extra_args
+
+    class Enc:
+        name = "fake-enc"
+
+        def encode(self, text):
+            return text
+
+    class Guard:                      # acts on half of the injected tool outputs, never on clean ones or plans
+        alpha = 0.05
+        pooled_can_flag = True
+
+        def __init__(self, *a, **k):
+            pass
+
+        def fit_outputs(self, *a, **k):
+            return self
+
+        def fit_drift(self, *a, **k):
+            return self
+
+        def output_pvalue(self, tool, x):
+            acts = "<INFORMATION>" in x and zlib.crc32(x.encode()) % 2 == 0
+            return 0.0, (0.0 if acts else 0.5)
+
+        def drift_pvalue(self, a, b):
+            return 0.0, 0.5
+    monkeypatch.setattr(E3, "REPO", tmp_path)
+    monkeypatch.setattr(E3, "LOGDIR", tmp_path / "logs")
+    monkeypatch.setattr(E3, "make_llm", lambda lc: Fake())
+    monkeypatch.setattr(E3, "build_encoder", lambda c: Enc())
+    monkeypatch.setattr(E3, "refuse_test_only", lambda e: None)
+    monkeypatch.setattr(E3, "AgentGuard", Guard)
+    monkeypatch.setattr(E3, "run_record", lambda *a, **k: contextlib.nullcontext(type("R", (), {"update": lambda s, **kw: None})()))
+    cfg = {"alpha": 0.05, "seeds": [0, 1], "encoder": {}, "agentdojo": {
+        "benchmark_version": "v1.2.2", "suites": ["banking"], "calibration_task_frac": 0.5, "replay": True,
+        "replay_check_n": 6, "llms": [{"model": "fake"}], "attacks": ["important_instructions"],
+        "defenses": ["wts_output_block", "none", "wts_full"]}}
+    E3.run_agents(cfg)
+    d = pd.read_csv(tmp_path / "results/e3/agentdojo_items.csv", dtype=str, keep_default_na=False)
+    assert len(d) == 2 * 3 * (8 + 8 * 9) and not d.duplicated(["seed", "defense", "attack", "user_task",
+                                                                  "injection_task"]).any()
+    none = d[d.defense == "none"].set_index(["seed", "attack", "user_task", "injection_task"])
+    w = d[d.defense != "none"]
+    rep = w[w.replayed == "True"]
+    assert len(rep) > 0 and len(w[w.replayed == "False"]) > 0
+    for _, r in rep.iterrows():
+        n = none.loc[(r.seed, r.attack, r.user_task, r.injection_task)]
+        assert (r.utility, r.security) == (n.utility, n.security)
+    assert (w[w.attack == "none"].replayed == "True").all()          # clean runs: the guard never acts
+    # seed-free no-defense logs: one folder shared by both seeds, no per-seed calibration folders
+    assert (tmp_path / "logs/local-fake-none").exists() and not list((tmp_path / "logs").glob("*calib*"))
+    chk = pd.read_csv(tmp_path / "results/e3/agentdojo_replay_check.csv")
+    assert len(chk) == 6 and chk.same_result.all() and chk.same_trajectory.all()
+    n = calls["n"]
+    E3.run_agents(cfg)                                                # resume: everything is done
+    assert calls["n"] == n

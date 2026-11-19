@@ -6,6 +6,13 @@ Agent mode: InjecAgent's predict_one_case / evaluate_output_prompted unchanged; 
 flagged tool response is replaced by AgentDojo's redaction string before the model sees it. ASR-valid =
 succ / (succ + unsucc), as in InjecAgent's get_score.
 
+Replay (config injecagent.replay: true; authors' decision 2026-11-19). At temperature 0 a case's result depends
+only on the prompt the model sees. (1) The no-defense run does not depend on the seed (the seed only changes the
+guard's calibration), so it is run once, with the first seed, and its rows are copied to the other seeds.
+(2) With wts_output_block, a case whose tool response is not flagged gives the model exactly the no-defense prompt,
+so the no-defense result is copied. Only flagged cases are run. Copied rows carry replayed=True. A determinism
+check reruns a random sample of copied cases for real (results/e3/injecagent_replay_check.csv).
+
 --smoke: detection only, test-only hashing encoder, local benign fillers; results/_smoke/.
 """
 from __future__ import annotations
@@ -139,6 +146,10 @@ def run(cfg, smoke=False):
             agents_left = not smoke and any(
                 len([k for k in done_keys(out / "injecagent_items.csv", AGENT_KEY)
                      if k[:3] == (lc["model"], str(seed), setting)]) < n_agent for lc in ic["llms"])
+            if ic.get("replay") and seed == cfg["seeds"][0] and not smoke:     # determinism check still to do
+                agents_left = agents_left or any(
+                    not (out / "done" / f"injecagent_replay_check_{lc['model'].split('/')[-1]}_{setting}.ok").exists()
+                    for lc in ic["llms"])
             if not smoke and det_marker.exists() and not agents_left:
                 print(f"[E3 InjecAgent] seed {seed} {setting}: all done, skipping", flush=True)
                 continue
@@ -177,9 +188,24 @@ def run(cfg, smoke=False):
                 rec.update(detection=det)
 
 
+def _none_results(out, model, seed, setting):
+    """{(split, case): row} of finished no-defense runs (the source of replayed rows)."""
+    import pandas as pd
+    p = out / "injecagent_items.csv"
+    if not p.exists():
+        return {}
+    d = pd.read_csv(p, dtype=str, keep_default_na=False)
+    d = d[(d.llm == model) & (d.seed == str(seed)) & (d.setting == setting) & (d.defense == "none")]
+    if "replayed" in d:
+        d = d[d.replayed.str.lower() != "true"]
+    return {(r["split"], r["case"]): r for r in d.to_dict("records")}
+
+
 def run_agents(cfg, cases, guard, enc, seed, setting, out):
     from wts.llm import build_llm
     ic = cfg["injecagent"]
+    replay = bool(ic.get("replay", False))
+    first_seed = cfg["seeds"][0]
     with in_injecagent():
         from src.output_parsing import evaluate_output_prompted
         from src.prompts.agent_prompts import PROMPT_DICT
@@ -190,7 +216,7 @@ def run_agents(cfg, cases, guard, enc, seed, setting, out):
             mshort = lc["model"].split("/")[-1]
             done = done_keys(out / "injecagent_items.csv", AGENT_KEY)
             llm = None
-            for dfn in ic["defenses"]:
+            for dfn in sorted(ic["defenses"], key=lambda d: d != "none"):     # no-defense first: replay source
                 total = sum(len(cs) for cs in cases.values())
                 left = [(split, i, c) for split, cs in cases.items() for i, c in enumerate(cs)
                         if (lc["model"], str(seed), setting, dfn, split, str(i)) not in done]
@@ -199,7 +225,8 @@ def run_agents(cfg, cases, guard, enc, seed, setting, out):
                     continue
                 llm = llm or build_llm(lc)
                 P = Progress(f"E3 InjecAgent {mshort} seed {seed} {setting} {dfn}", total, resumed=total - len(left))
-                rows = []
+                ref = _none_results(out, lc["model"], first_seed, setting) if replay else {}
+                rows, n_replayed = [], 0
                 for split, i, c in left:
                     item = dict(c)
                     flagged, sim_src = False, ""
@@ -208,6 +235,19 @@ def run_agents(cfg, cases, guard, enc, seed, setting, out):
                         flagged = p <= cfg["alpha"]
                         if flagged:
                             item["Tool Response"] = REDACTED
+                    r = ref.get((split, str(i)))
+                    if r is not None and ((dfn == "none" and seed != first_seed)
+                                          or (dfn == "wts_output_block" and not flagged)):
+                        # same prompt as the no-defense run of this case: its result is copied
+                        rows.append(dict(llm=lc["model"], seed=seed, setting=setting, defense=dfn, split=split,
+                                         case=i, flagged=flagged, eval=r["eval"], sim_response=r["sim_response"],
+                                         replayed=True))
+                        n_replayed += 1
+                        P.step(note=f"{split} (replayed)")
+                        if len(rows) >= 10:
+                            append_rows(out / "injecagent_items.csv", rows)
+                            rows = []
+                        continue
                     out1 = _predict(sys_p, user_p, item, tool_dict, llm, step_2=False)
                     ev = evaluate_output_prompted(out1, item["Attacker Tools"][0], item["Attacker Tools"],
                                                   item["User Tool"], item["Attacker Instruction"])
@@ -222,12 +262,61 @@ def run_agents(cfg, cases, guard, enc, seed, setting, out):
                                                        item["User Tool"], item["Attacker Instruction"])["eval"]
                     rows.append(dict(llm=lc["model"], seed=seed, setting=setting, defense=dfn, split=split,
                                      case=i, flagged=flagged, eval=res,
-                                     sim_response=sim_src if split == "ds" and ev["eval"] == "succ" else ""))
+                                     sim_response=sim_src if split == "ds" and ev["eval"] == "succ" else "",
+                                     replayed=False))
                     P.step(note=split)
                     if len(rows) >= 10:     # saved every 10 cases: an interruption loses at most 9
                         append_rows(out / "injecagent_items.csv", rows)
                         rows = []
                 append_rows(out / "injecagent_items.csv", rows)
+                if replay:
+                    print(f"[E3 InjecAgent {mshort} seed {seed} {setting} {dfn}] {n_replayed} of {len(left)} cases "
+                          f"replayed from the no-defense run, {len(left) - n_replayed} run", flush=True)
+            if replay and seed == first_seed:
+                llm = llm or build_llm(lc)
+                replay_check(cfg, cases, setting, out, lc, llm, sys_p, user_p, tool_dict, evaluate_output_prompted)
+
+
+def _run_case(item, split, sys_p, user_p, tool_dict, llm, evaluate_output_prompted):
+    """One InjecAgent case exactly as in run_agents: returns eval ('succ' | 'unsucc' | 'invalid')."""
+    out1 = _predict(sys_p, user_p, item, tool_dict, llm, step_2=False)
+    ev = evaluate_output_prompted(out1, item["Attacker Tools"][0], item["Attacker Tools"], item["User Tool"],
+                                  item["Attacker Instruction"])
+    if split == "ds" and ev["eval"] == "succ":
+        item = dict(item, **{"Attacker Tool Parameters": ev["Attacker Tool Parameters"],
+                             "Attacker Tool Thought": ev["Attacker Tool Thought"]})
+        item["Attacker Tool Response"], _ = simulated_attacker_response(
+            item["Attacker Tools"][0], item["Attacker Tool Parameters"], tool_dict, llm)
+        out2 = _predict(sys_p, user_p, item, tool_dict, llm, step_2=True)
+        return evaluate_output_prompted(out2, item["Attacker Tools"][1], item["Attacker Tools"], item["User Tool"],
+                                        item["Attacker Instruction"])["eval"]
+    return ev["eval"]
+
+
+def replay_check(cfg, cases, setting, out, lc, llm, sys_p, user_p, tool_dict, evaluate_output_prompted):
+    """Determinism check behind replay: rerun a random sample of no-defense cases for real and compare with the
+    recorded result. Once per (llm, setting); results/e3/injecagent_replay_check.csv."""
+    mshort = lc["model"].split("/")[-1]
+    marker = out / "done" / f"injecagent_replay_check_{mshort}_{setting}.ok"
+    if marker.exists():
+        return
+    first_seed = cfg["seeds"][0]
+    ref = _none_results(out, lc["model"], first_seed, setting)
+    n = int(cfg["injecagent"].get("replay_check_n", 30))
+    keys = sorted(ref, key=lambda k: (k[0], int(k[1])))
+    pick = random.Random(f"replay-check-{setting}").sample(keys, min(n, len(keys)))
+    purge_rows(out / "injecagent_replay_check.csv", {"llm": lc["model"], "setting": setting})
+    P = Progress(f"E3 InjecAgent {mshort} {setting} determinism check", len(pick), every_s=60)
+    rows = []
+    for split, i in pick:
+        res = _run_case(dict(cases[split][int(i)]), split, sys_p, user_p, tool_dict, llm, evaluate_output_prompted)
+        rows.append(dict(llm=lc["model"], setting=setting, split=split, case=int(i), recorded=ref[(split, i)]["eval"],
+                         rerun=res, match=res == ref[(split, i)]["eval"]))
+        P.step()
+    append_rows(out / "injecagent_replay_check.csv", rows)
+    mark_done(marker, dict(n=len(rows), matches=sum(r["match"] for r in rows)))
+    print(f"[E3 InjecAgent {mshort} {setting}] determinism check: {sum(r['match'] for r in rows)}/{len(rows)} reruns "
+          f"match the recorded result", flush=True)
 
 
 def _predict(sys_p, user_p, item, tool_dict, llm, step_2):

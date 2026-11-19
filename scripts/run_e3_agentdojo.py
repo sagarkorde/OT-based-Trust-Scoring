@@ -15,6 +15,16 @@ Resumable
   defense, attack) block is marked in results/e3/done/ and skipped outright.
   Ground-truth detection: one marker per seed.
 
+Replay (config agentdojo.replay: true; authors' decision 2026-11-19)
+  At temperature 0 a run depends only on what the model is shown. (1) The no-defense, spotlighting and PI-detector
+  pipelines do not use the seed (the seed only picks the calibration/test split and calibrates the WTS guard), so
+  their logs are shared by all seeds: each task runs once, whichever seed needs it first. Calibration runs use the
+  no-defense pipeline (identical structure). (2) A WTS-defended run is identical to the no-defense run until a
+  guard element acts. For each case the guard elements' own code is run on every prefix of the saved no-defense
+  trajectory at the points where the live pipeline calls them; if no element would act, the no-defense result is
+  copied (replayed=True); otherwise the case is run for real. (3) A random sample of copied cases is rerun for real
+  with the WTS pipeline (results/e3/agentdojo_replay_check.csv).
+
 Outputs
   results/e3/agentdojo_gt_outputs.csv   per tool output: suite, user/injection task, tool, injected, score, p
   results/e3/agentdojo_items.csv        per (suite, llm, defense, seed, attack, user_task, injection_task): utility, security
@@ -23,6 +33,8 @@ Outputs
 from __future__ import annotations
 
 import argparse
+import copy
+import random
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -48,6 +60,7 @@ from wts.runlog import append_rows, refuse_test_only, run_record  # noqa: E402
 from wts.stats import detection_metrics  # noqa: E402
 
 LOGDIR = REPO / "results/agentdojo_logs"
+DETERMINISTIC = ("none", "spotlighting_with_delimiting", "transformers_pi_detector")   # no seed-dependent part
 
 
 def split_tasks(suite, frac, seed):
@@ -101,12 +114,17 @@ class ProgressElement(BasePipelineElement):
         return query, runtime, env, messages, extra_args
 
 
-def count_logged(logdir: Path, pipeline_name: str, suite: str, attack: str, prefix: str = "user_task") -> int:
+def count_logged(logdir: Path, pipeline_name: str, suite: str, attack: str, prefix: str = "user_task",
+                 user_tasks=None) -> int:
     """Finished runs already in AgentDojo's logs for this pipeline / suite / attack ('none' = benign).
     prefix 'user_task' counts user-task runs; 'injection_task' counts the benign runs of injection tasks that
     AgentDojo does before an attack (to check that each injection goal is achievable)."""
     base = Path(logdir) / pipeline_name / suite
-    return sum(1 for f in base.glob(f"{prefix}*/{attack}/*.json") if _finished(f)) if base.exists() else 0
+    if not base.exists():
+        return 0
+    keep = None if user_tasks is None else set(user_tasks)
+    return sum(1 for f in base.glob(f"{prefix}*/{attack}/*.json")
+               if (keep is None or f.parent.parent.name in keep) and _finished(f))
 
 
 def _finished(path: Path) -> bool:
@@ -120,15 +138,15 @@ def _finished(path: Path) -> bool:
     return isinstance(d.get("utility"), bool) and isinstance(d.get("security"), bool)
 
 
-def reset_for_attack(pe, label, logdir, pipeline_name, suite, attack, aname, n_user):
+def reset_for_attack(pe, label, logdir, pipeline_name, suite, attack, aname, n_user, user_tasks=None):
     """Progress for benchmark_suite_with_injections: (unless DoS) every injection task once without injections,
     then every (user task, injection task) pair under the attack."""
     n_inj = len(suite.injection_tasks)
     pre = 0 if attack.is_dos_attack else n_inj
     done = (0 if attack.is_dos_attack else
             count_logged(logdir, pipeline_name, suite.name, "none", "injection_task")) + \
-        count_logged(logdir, pipeline_name, suite.name, aname, "user_task")
-    pe.reset(label, pre + n_user * n_inj, done)
+        count_logged(logdir, pipeline_name, suite.name, aname, "user_task", user_tasks)
+    pe.reset(label, pre + n_user * n_inj, min(done, pre + n_user * n_inj))
 
 
 def harvest_calibration(logdir: Path, pipeline_name: str, suite_name: str, user_ids: list[str]):
@@ -150,6 +168,115 @@ def harvest_calibration(logdir: Path, pipeline_name: str, suite_name: str, user_
                 steps.append(plan_text(m))
         pairs += [(steps[i - 1], steps[i]) for i in range(1, len(steps))]
     return outputs, pairs
+
+
+# ---------------------------------------------------------------------------------------- replay
+def offline_guard_check(guard, enc, dfn: str, messages):
+    """Would the WTS elements of `dfn` act anywhere on this no-defense trajectory? Runs the elements' own code on
+    each prefix of the trajectory at the point where the live pipeline calls them: the drift element after every
+    model step, the tool-output element after every block of tool results. Returns (acts, output_log, drift_log);
+    the logs stop at the first action, after which the defended run would diverge."""
+    from agentdojo.functions_runtime import EmptyEnv
+
+    from wts.agentdojo_hook import WTSIntentDriftGuard, WTSToolOutputGuard
+    n = 2 if dfn == "wts_full" else 1
+    olog, dlog = [], []
+    og = WTSToolOutputGuard(guard, enc, "block", n_tests=n, log=olog) \
+        if dfn in ("wts_output_block", "wts_output_quarantine", "wts_full") else None
+    dg = WTSIntentDriftGuard(guard, enc, n_tests=n, log=dlog) if dfn in ("wts_drift_confirm", "wts_full") else None
+    msgs = copy.deepcopy(list(messages))
+    for j, m in enumerate(msgs):
+        if dg is not None and m["role"] == "assistant":
+            dg.query("", None, EmptyEnv(), msgs[: j + 1], {})
+            if any(e["flag"] for e in dlog):
+                return True, olog, dlog
+        if og is not None and m["role"] == "tool" and (j + 1 == len(msgs) or msgs[j + 1]["role"] != "tool"):
+            og.query("", None, EmptyEnv(), msgs[: j + 1], {})
+            if any(e["flag"] for e in olog):
+                return True, olog, dlog
+    return False, olog, dlog
+
+
+def replay_block(pipe, suite, test_ids, aname, attack, guard, enc, dfn, none_name, key, bv, label, olog, dlog):
+    """Rows for one (seed, suite, WTS defense, attack) block: copied from the no-defense run where no guard element
+    would act, run for real otherwise (AgentDojo's own single-task runners, logged and resumable)."""
+    from agentdojo.benchmark import load_task_results, run_task_with_injection_tasks, run_task_without_injection_tasks
+    inj = ["none"] if aname == "none" else sorted(suite.injection_tasks)
+    P = Progress(label, len(test_ids) * len(inj), every_s=60)
+    rows, n_copy = [], 0
+    for uid in test_ids:
+        to_run = []
+        for iid in inj:
+            ref = load_task_results(none_name, suite.name, uid, aname, iid, LOGDIR)
+            acts, ol, dl = offline_guard_check(guard, enc, dfn, ref.messages)
+            tag = dict(user_task=uid, injection_task="" if aname == "none" else iid, replayed=not acts)
+            olog += [dict(e, text=str(e.get("text", ""))[:300], **tag) for e in ol]
+            dlog += [dict(e, plan=str(e.get("plan", ""))[:300], **tag) for e in dl]
+            if acts:
+                to_run.append(iid)
+                continue
+            rows.append(dict(**key, user_task=uid, injection_task=tag["injection_task"], utility=ref.utility,
+                             security=None if aname == "none" else ref.security, replayed=True))
+            n_copy += 1
+            P.step(note="replayed")
+        if not to_run:
+            continue
+        if aname == "none":
+            u, _ = run_task_without_injection_tasks(suite, pipe, suite.user_tasks[uid], LOGDIR, False, bv)
+            rows.append(dict(**key, user_task=uid, injection_task="", utility=u, security=None, replayed=False))
+            P.step(note="run")
+        else:
+            ur, sr = run_task_with_injection_tasks(suite, pipe, suite.user_tasks[uid], attack, LOGDIR, False,
+                                                   injection_tasks=to_run, benchmark_version=bv)
+            for k, u in ur.items():
+                rows.append(dict(**key, user_task=k[0], injection_task=k[1], utility=u, security=sr[k], replayed=False))
+                P.step(note="run")
+    print(f"[{label}] {n_copy} of {len(rows)} cases replayed from the no-defense run, {len(rows) - n_copy} run",
+          flush=True)
+    return rows
+
+
+def replay_check(llm, lc, guard, enc, splits, bv, n, out, build_pipeline, WTSIntentDriftGuard, WTSToolOutputGuard):
+    """Determinism check: rerun a random sample of replayed wts_full attack cases for real with the WTS pipeline
+    and compare result and trajectory with the copied no-defense run."""
+    import pandas as pd
+    from agentdojo.benchmark import load_task_results, run_task_with_injection_tasks
+    mshort = lc["model"].split("/")[-1]
+    marker = out / "done" / f"agentdojo_replay_check_{mshort}.ok"
+    if marker.exists():
+        return
+    items = pd.read_csv(out / "agentdojo_items.csv", dtype=str, keep_default_na=False)
+    seed0 = str(min(int(x) for x in items.seed.unique()))
+    cand = items[(items.llm == lc["model"]) & (items.seed == seed0) & (items.defense == "wts_full")
+                 & (items.attack != "none") & (items.replayed.str.lower() == "true")]
+    pick = cand.sample(min(n, len(cand)), random_state=0) if len(cand) else cand
+    pipe = build_pipeline(llm, "", [WTSToolOutputGuard(guard, enc, "block", n_tests=2)],
+                          [WTSIntentDriftGuard(guard, enc, n_tests=2)])
+    pipe.name = f"{llm.name}-wts_full-seed{seed0}-check"
+    none_name = f"{llm.name}-none"
+    P = Progress(f"E3 {mshort} determinism check", len(pick), every_s=60)
+    rows = []
+
+    def traj(msgs):
+        return [(m["role"], str(m.get("content")), str(m.get("tool_calls"))) for m in msgs]
+    for r in pick.to_dict("records"):
+        suite = splits[r["suite"]][0]
+        attack = load_attack(r["attack"], suite, pipe)
+        ur, sr = run_task_with_injection_tasks(suite, pipe, suite.user_tasks[r["user_task"]], attack, LOGDIR, False,
+                                               injection_tasks=[r["injection_task"]], benchmark_version=bv)
+        k = (r["user_task"], r["injection_task"])
+        a = load_task_results(pipe.name, r["suite"], k[0], r["attack"], k[1], LOGDIR)
+        b = load_task_results(none_name, r["suite"], k[0], r["attack"], k[1], LOGDIR)
+        rows.append(dict(llm=lc["model"], suite=r["suite"], user_task=k[0], injection_task=k[1],
+                         recorded_utility=r["utility"], rerun_utility=ur[k], recorded_security=r["security"],
+                         rerun_security=sr[k], same_result=(str(ur[k]) == r["utility"] and str(sr[k]) == r["security"]),
+                         same_trajectory=traj(a.messages) == traj(b.messages)))
+        P.step()
+    append_rows(out / "agentdojo_replay_check.csv", rows)
+    mark_done(marker, dict(n=len(rows), same_result=sum(x["same_result"] for x in rows),
+                           same_trajectory=sum(x["same_trajectory"] for x in rows)))
+    print(f"[E3 {mshort}] determinism check: {sum(x['same_result'] for x in rows)}/{len(rows)} same result, "
+          f"{sum(x['same_trajectory'] for x in rows)}/{len(rows)} identical trajectory", flush=True)
 
 
 # ---------------------------------------------------------------------------------------- GT detection
@@ -267,21 +394,32 @@ def _run_agents(cfg, AgentPipeline, PipelineConfig, benchmark_suite_with_injecti
     enc = build_encoder(cfg["encoder"])
     refuse_test_only(enc)
     bv = ac["benchmark_version"]
+    replay = bool(ac.get("replay", False))
+    defenses = sorted(ac["defenses"], key=lambda d: (d != "none", d not in DETERMINISTIC))   # no-defense first
+    if replay and "none" not in defenses:
+        raise ValueError("agentdojo.replay needs the 'none' defense (it is the replay source)")
     for lc in ac["llms"]:
         for seed in cfg["seeds"]:
             llm = make_llm(lc)
             mshort = lc["model"].split("/")[-1]
+            none_name = f"{llm.name}-none"
             # 1) calibration: benign runs on every suite's calibration tasks (resumable through AgentDojo's logs),
             #    then read back from the logs and pooled into one guard
             pe = ProgressElement()
-            p_cal = build_pipeline(llm, f"{llm.name}-calib-seed{seed}", first=[pe])
+            if replay:     # the no-defense pipeline, whose logs all seeds share
+                p_cal = AgentPipeline.from_config(PipelineConfig(llm=llm, model_id=None, defense=None,
+                                                                 system_message_name=None, system_message=None))
+                p_cal.elements = [pe, *p_cal.elements]
+                p_cal.name = none_name
+            else:
+                p_cal = build_pipeline(llm, f"{llm.name}-calib-seed{seed}", first=[pe])
             splits, outputs, pairs = {}, defaultdict(list), []
             for sname in ac["suites"]:
                 suite = get_suite(bv, sname)
                 cal_ids, test_ids = split_tasks(suite, ac["calibration_task_frac"], seed)
                 splits[sname] = (suite, test_ids)
                 pe.reset(f"E3 {mshort} seed {seed} calibration {sname}", len(cal_ids),
-                         count_logged(LOGDIR, p_cal.name, sname, "none"))
+                         count_logged(LOGDIR, p_cal.name, sname, "none", user_tasks=cal_ids))
                 benchmark_suite_without_injections(p_cal, suite, LOGDIR, False, user_tasks=cal_ids, benchmark_version=bv)
                 o, pr = harvest_calibration(LOGDIR, p_cal.name, sname, cal_ids)
                 for t, v in o.items():
@@ -295,7 +433,7 @@ def _run_agents(cfg, AgentPipeline, PipelineConfig, benchmark_suite_with_injecti
 
             for sname, (suite, test_ids) in splits.items():
                 with run_record("e3", dict(cfg, mode="agents", llm=lc["model"], suite=sname), seed) as rec:
-                    for dfn in ac["defenses"]:
+                    for dfn in defenses:
                         pe = ProgressElement()
                         olog, dlog = [], []
                         if dfn in ("none", "spotlighting_with_delimiting", "transformers_pi_detector"):
@@ -312,7 +450,8 @@ def _run_agents(cfg, AgentPipeline, PipelineConfig, benchmark_suite_with_injecti
                             if dfn in ("wts_drift_confirm", "wts_full"):
                                 after_llm.append(WTSIntentDriftGuard(guard, enc, n_tests=n, log=dlog))
                             pipe = build_pipeline(llm, "", after_tools, after_llm, first=[pe])
-                        pipe.name = f"{llm.name}-{dfn}-seed{seed}"    # unique log folder per configuration
+                        # unique log folder per configuration; with replay the seed-free pipelines are shared by seeds
+                        pipe.name = f"{llm.name}-{dfn}" if replay and dfn in DETERMINISTIC else f"{llm.name}-{dfn}-seed{seed}"
                         for aname in ["none", *ac["attacks"]]:
                             key = dict(llm=lc["model"], seed=seed, suite=sname, defense=dfn, attack=aname)
                             marker = out / "done" / f"agents_{mshort}_seed{seed}_{sname}_{dfn}_{aname}.ok"
@@ -321,15 +460,24 @@ def _run_agents(cfg, AgentPipeline, PipelineConfig, benchmark_suite_with_injecti
                                 continue
                             purge_rows(out / "agentdojo_items.csv", key)
                             label = f"E3 {mshort} seed {seed} {sname} {dfn} {aname}"
+                            if replay and dfn not in DETERMINISTIC:
+                                attack = None if aname == "none" else load_attack(aname, suite, pipe)
+                                rows = replay_block(pipe, suite, test_ids, aname, attack, guard, enc, dfn, none_name,
+                                                    key, bv, label, olog, dlog)
+                                append_rows(out / "agentdojo_items.csv", rows)
+                                mark_done(marker, dict(n_rows=len(rows)))
+                                continue
                             if aname == "none":
-                                pe.reset(label, len(test_ids), count_logged(LOGDIR, pipe.name, sname, "none"))
+                                pe.reset(label, len(test_ids), count_logged(LOGDIR, pipe.name, sname, "none",
+                                                                            user_tasks=test_ids))
                                 res = benchmark_suite_without_injections(pipe, suite, LOGDIR, False, user_tasks=test_ids,
                                                                          benchmark_version=bv)
                                 rows = [dict(**key, user_task=k[0], injection_task="", utility=u, security=None)
                                         for k, u in res["utility_results"].items()]
                             else:
                                 attack = load_attack(aname, suite, pipe)
-                                reset_for_attack(pe, label, LOGDIR, pipe.name, suite, attack, aname, len(test_ids))
+                                reset_for_attack(pe, label, LOGDIR, pipe.name, suite, attack, aname, len(test_ids),
+                                                 user_tasks=test_ids)
                                 res = benchmark_suite_with_injections(pipe, suite, attack, LOGDIR, False,
                                                                       user_tasks=test_ids, benchmark_version=bv,
                                                                       verbose=False)
@@ -342,7 +490,10 @@ def _run_agents(cfg, AgentPipeline, PipelineConfig, benchmark_suite_with_injecti
                         append_rows(out / "agentdojo_guard_log" / f"out_{tag}.csv", olog)
                         append_rows(out / "agentdojo_guard_log" / f"drift_{tag}.csv", dlog)
                     rec.update(n_cal_outputs=sum(len(v) for v in outputs.values()), n_plan_pairs=len(pairs),
-                               pooled_can_flag=guard.pooled_can_flag)
+                               pooled_can_flag=guard.pooled_can_flag, replay=replay)
+            if replay and seed == cfg["seeds"][0] and "wts_full" in defenses:
+                replay_check(llm, lc, guard, enc, splits, bv, int(ac.get("replay_check_n", 30)), out,
+                             build_pipeline, WTSIntentDriftGuard, WTSToolOutputGuard)
 
 
 if __name__ == "__main__":
