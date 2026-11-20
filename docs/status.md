@@ -120,6 +120,6 @@ by the authors, unless an API model (e.g. gpt-4o-mini with a key) is used for it
   for runs started after commit of this note; InjecAgent and the AgentDojo ground-truth detection used CPU
   embeddings. The embedding cache stores fp16, so CPU- and GPU-computed embeddings agree to the stored precision.
   Still on the CPU: the HarmBench Llama-2-13B classifier (G4/E4 judge; 26 GB in bf16 cannot fit 8 GB, and a
-  quantised judge would no longer be the classifier validated in G4) and, pending the authors' choice, AgentDojo's
-  DeBERTa PI detector (see above).
+  quantised judge would no longer be the classifier validated in G4) and AgentDojo's DeBERTa PI detector (authors'
+  choice 2026-11-20: CPU, same decisions at normal speed; GPU spilled into system memory, see above).
 
