@@ -170,6 +170,22 @@ def harvest_calibration(logdir: Path, pipeline_name: str, suite_name: str, user_
     return outputs, pairs
 
 
+def _from_config_pi_device(AgentPipeline, pc, device):
+    """AgentPipeline.from_config, optionally building AgentDojo's DeBERTa PI detector on the CPU.
+    AgentDojo's detector classifies whole tool outputs without truncation (up to ~8k tokens); on an 8 GB GPU that
+    spills into shared system memory and pushes the LLM out of VRAM (a 3-step task: 9 s without the detector,
+    144 s with it). The detector's code, model and threshold are unchanged; only where it runs."""
+    if device != "cpu" or pc.defense != "transformers_pi_detector":
+        return AgentPipeline.from_config(pc)
+    import torch
+    orig = torch.cuda.is_available
+    torch.cuda.is_available = lambda: False      # AgentDojo picks the device with torch.cuda.is_available()
+    try:
+        return AgentPipeline.from_config(pc)
+    finally:
+        torch.cuda.is_available = orig
+
+
 # ---------------------------------------------------------------------------------------- replay
 def offline_guard_check(guard, enc, dfn: str, messages):
     """Would the WTS elements of `dfn` act anywhere on this no-defense trajectory? Runs the elements' own code on
@@ -439,7 +455,7 @@ def _run_agents(cfg, AgentPipeline, PipelineConfig, benchmark_suite_with_injecti
                         if dfn in ("none", "spotlighting_with_delimiting", "transformers_pi_detector"):
                             pc = PipelineConfig(llm=llm, model_id=None, defense=None if dfn == "none" else dfn,
                                                 system_message_name=None, system_message=None)
-                            pipe = AgentPipeline.from_config(pc)
+                            pipe = _from_config_pi_device(AgentPipeline, pc, ac.get("pi_detector_device"))
                             pipe.elements = [pe, *pipe.elements]
                         else:
                             n = 2 if dfn == "wts_full" else 1

@@ -6,6 +6,7 @@ encoder: {kind: hf_tokens, model: BAAI/bge-base-en-v1.5, device: cpu}
 agentdojo:
   replay: true          # authors' decision 2026-11-19: see scripts/run_e3_agentdojo.py docstring
   replay_check_n: 30
+  pi_detector_device: cpu   # AgentDojo's DeBERTa detector on long tool outputs overflows 8 GB VRAM (see run_e3_agentdojo._from_config_pi_device)
   benchmark_version: v1.2.2
   suites: [workspace, travel, banking, slack]
   attacks: [important_instructions]

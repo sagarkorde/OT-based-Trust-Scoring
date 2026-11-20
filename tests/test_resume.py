@@ -464,3 +464,32 @@ def test_agentdojo_replay_matches_real_runs(tmp_path, monkeypatch):
     n = calls["n"]
     E3.run_agents(cfg)                                                # resume: everything is done
     assert calls["n"] == n
+
+
+def test_pi_detector_can_be_built_on_cpu(monkeypatch):
+    import torch
+    from agentdojo.agent_pipeline import AgentPipeline, PipelineConfig
+
+    import run_e3_agentdojo as E3
+    seen = {}
+
+    class FakeDet:
+        def __init__(self, *a, **k):
+            seen["cuda_visible"] = torch.cuda.is_available()
+    import agentdojo.agent_pipeline.agent_pipeline as AP
+    monkeypatch.setattr(AP, "TransformersBasedPIDetector", FakeDet)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)          # pretend a GPU exists
+    from agentdojo.agent_pipeline.base_pipeline_element import BasePipelineElement
+
+    class L(BasePipelineElement):
+        name = "local-x"
+
+        def query(self, *a, **k):
+            return a
+    llm = L()
+    pc = PipelineConfig(llm=llm, model_id=None, defense="transformers_pi_detector", system_message_name=None,
+                        system_message=None)
+    E3._from_config_pi_device(AgentPipeline, pc, "cpu")
+    assert seen["cuda_visible"] is False and torch.cuda.is_available() is True   # restored afterwards
+    E3._from_config_pi_device(AgentPipeline, pc, None)
+    assert seen["cuda_visible"] is True

@@ -106,4 +106,14 @@ by the authors, unless an API model (e.g. gpt-4o-mini with a key) is used for it
   reruns (2/60) change outcome. A copied WTS row therefore equals one realisation of the no-defense run rather than
   an independent rerun; the paper reports the 58/60 figure and treats run-to-run variation as a limitation of the
   replay procedure (and of every temperature-0 result on this stack).
+- AgentDojo PI-detector baseline (2026-11-20): AgentDojo's DeBERTa detector classifies whole tool outputs without
+  truncation (up to ~8k tokens). On the 8 GB RTX 4060 this spilled into shared system memory and pushed Llama out
+  of VRAM: workspace user_task_26 took 9 s without the detector and 144 s with it (same 3 steps), and three runs of
+  user_task_38 took 25-52 min. From 2026-11-20 the detector runs on the CPU (`pi_detector_device: cpu`); code, model
+  and threshold unchanged, decisions identical up to floating-point differences near the 0.5 threshold. Seed-0
+  workspace PI-detector runs before the switch were computed on the GPU and are kept.
+- Context limit: Ollama runs Llama with a 16k-token context and silently drops the oldest tokens when a trajectory
+  grows beyond it (seen in a 15-step loop with ~30k-character tool outputs); AgentDojo's API backends would raise
+  context_length_exceeded instead. Affects only very long trajectories, identically for every defense; reported as
+  a limitation.
 
