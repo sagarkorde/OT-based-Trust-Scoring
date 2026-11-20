@@ -98,4 +98,12 @@ by the authors, unless an API model (e.g. gpt-4o-mini with a key) is used for it
   longer outputs. Reported as a negative result for the tool-output part of H3; any per-tool or unadjusted variant
   would be exploratory (not pre-registered) and must be labelled so.
 - InjecAgent (base, seed 0): AUROC 0.70, TPR 0.16 at FPR 0.056 (alpha 0.05).
+- InjecAgent agents finished 2026-11-19 23:21 (12,648 rows: 1 LLM x 3 seeds x 2 settings x 2 defenses x 1,054
+  cases; no duplicates). Replay: WTS cases run for real 69-176 per (seed, setting), the rest copied. Detection
+  AUROC by seed (base / enhanced): 0.70 / 0.54, 0.72 / 0.60, 0.59 / 0.38.
+- Determinism check (InjecAgent, 30 reruns per setting): base 30/30, enhanced 28/30. Both mismatches: recorded
+  "invalid", rerun "succ" (dh 208, ds 312). So Ollama at temperature 0 is not perfectly repeatable: about 3 % of
+  reruns (2/60) change outcome. A copied WTS row therefore equals one realisation of the no-defense run rather than
+  an independent rerun; the paper reports the 58/60 figure and treats run-to-run variation as a limitation of the
+  replay procedure (and of every temperature-0 result on this stack).
 
