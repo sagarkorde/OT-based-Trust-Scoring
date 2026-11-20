@@ -1,8 +1,9 @@
 # E3 laptop profile: one open LLM (Llama 3.1 8B, Ollama Q4, 16k context), 3 seeds, one attack in E3
-# ('direct' minimal injection runs in E4). The WTS encoder runs on CPU so the GPU holds the LLM.
+# ('direct' minimal injection runs in E4). The WTS encoder (BGE, ~0.5 GB) runs on the GPU next to the LLM
+# (authors' request 2026-11-20; it ran on the CPU until then: InjecAgent and the ground-truth detection).
 seeds: [0, 1, 2]
 alpha: 0.05
-encoder: {kind: hf_tokens, model: BAAI/bge-base-en-v1.5, device: cpu}
+encoder: {kind: hf_tokens, model: BAAI/bge-base-en-v1.5, device: cuda}
 agentdojo:
   replay: true          # authors' decision 2026-11-19: see scripts/run_e3_agentdojo.py docstring
   replay_check_n: 30
