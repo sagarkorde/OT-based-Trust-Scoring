@@ -125,6 +125,57 @@ def ollama_unload_all(base: str = "http://localhost:11434"):
         return []
 
 
+def _ollama_up(url: str) -> bool:
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"{url}/api/version", timeout=5):
+            return True
+    except Exception:
+        return False
+
+
+def _ollama_exe() -> str | None:
+    import shutil
+    import sys
+    exe = shutil.which("ollama")
+    if exe is None and sys.platform == "win32":   # default per-user install location on Windows
+        cand = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Ollama", "ollama.exe")
+        exe = cand if os.path.exists(cand) else None
+    return exe
+
+
+def ensure_ollama_running(url: str = "http://localhost:11434", wait_s: int = 120) -> bool:
+    """Start a local Ollama server if none answers at `url` (e.g. after a reboot when the tray app did not start).
+    Returns True if it had to start one. The server runs detached, so it outlives this script, like the tray app."""
+    import subprocess
+    import sys
+    from urllib.parse import urlparse
+    if _ollama_up(url):
+        return False
+    host = urlparse(url).hostname or ""
+    exe = _ollama_exe()
+    if host not in ("localhost", "127.0.0.1", "::1") or exe is None:
+        raise RuntimeError(f"Ollama is not running at {url} and could not be started automatically. "
+                           "Open the Ollama app from the Start menu (or run `ollama serve` in another window), "
+                           "then rerun the same command; finished work is kept.")
+    print(f"[ollama] no server at {url}; starting `ollama serve` in the background ...", flush=True)
+    flags = 0
+    if sys.platform == "win32":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    os.makedirs("logs", exist_ok=True)
+    log = open(os.path.join("logs", "ollama_serve.log"), "ab")
+    subprocess.Popen([exe, "serve"], stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+                     creationflags=flags, start_new_session=sys.platform != "win32")
+    t0 = time.time()
+    while time.time() - t0 < wait_s:
+        if _ollama_up(url):
+            print(f"[ollama] server up after {time.time() - t0:.0f} s", flush=True)
+            return True
+        time.sleep(2)
+    raise RuntimeError(f"Started `ollama serve` but nothing answered at {url} within {wait_s} s "
+                       "(see logs/ollama_serve.log). Open the Ollama app from the Start menu, then rerun.")
+
+
 def ensure_ollama_tag(name: str, base: str, num_ctx: int, url: str = "http://localhost:11434",
                       template_from: str | None = None, num_predict: int | None = None):
     """Create the fixed-context Ollama tag `name` from `base` if it does not exist (pulls `base` if needed).
@@ -145,6 +196,7 @@ def ensure_ollama_tag(name: str, base: str, num_ctx: int, url: str = "http://loc
                 msg = json.loads(line or b"{}")
                 if "error" in msg:
                     raise RuntimeError(f"ollama {path}: {msg['error']}")
+    ensure_ollama_running(url)
     with urllib.request.urlopen(f"{url}/api/tags", timeout=10) as r:
         have = {m["name"] for m in json.loads(r.read())["models"]}
     def show(model):

@@ -2,6 +2,8 @@
 import re
 import importlib.util
 import sys
+
+import pytest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -163,3 +165,34 @@ def test_ollama_repeat_abort_returns_text_before_the_abort():
     llm._client = NS(chat=NS(completions=Completions()))
     assert llm.chat([{"role": "user", "content": "hi"}]) == "Thought: ok\nAction: Tool\n\n"
     assert llm.repeat_aborts == 1 and llm.last_repeat_abort and Completions.calls == 2   # no 5x retries
+
+
+def test_ensure_ollama_running_starts_a_server_when_none_answers(tmp_path, monkeypatch):
+    """After a reboot the Ollama app may not be running: the runner starts `ollama serve` itself."""
+    import socket
+    import subprocess
+    sys.path.insert(0, str(REPO / "src"))
+    from wts import hw
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    url = f"http://127.0.0.1:{port}"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(hw, "_ollama_exe", lambda: None)
+    with pytest.raises(RuntimeError, match="Open the Ollama app"):
+        hw.ensure_ollama_running(url, wait_s=2)
+    fake = tmp_path / "ollama"        # stands in for the real binary: `ollama serve` answers /api/version
+    fake.write_text(f"#!{sys.executable}\nimport http.server as h\n"
+                    "class H(h.BaseHTTPRequestHandler):\n"
+                    "    def log_message(self, *a): pass\n"
+                    "    def do_GET(self):\n"
+                    "        self.send_response(200); self.end_headers(); self.wfile.write(b'{}')\n"
+                    f"h.HTTPServer(('127.0.0.1', {port}), H).serve_forever()\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(hw, "_ollama_exe", lambda: str(fake))
+    try:
+        assert hw.ensure_ollama_running(url, wait_s=30) is True
+        assert hw.ensure_ollama_running(url, wait_s=30) is False      # already up: nothing to do
+        assert (tmp_path / "logs" / "ollama_serve.log").exists()
+    finally:
+        subprocess.run(["pkill", "-f", str(fake)])
