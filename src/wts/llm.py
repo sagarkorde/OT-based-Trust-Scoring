@@ -74,7 +74,7 @@ def build_llm(cfg: dict) -> ChatLLM:
         from .hw import ensure_ollama_tag
         ensure_ollama_tag(cfg["model"], cfg["ollama_base"], cfg.get("num_ctx", 4096),
                           cfg.get("base_url", "").replace("/v1", "") or "http://localhost:11434",
-                          template_from=cfg.get("template_from"))
+                          template_from=cfg.get("template_from"), num_predict=cfg.get("num_predict"))
     return ChatLLM(model=cfg["model"], base_url=cfg.get("base_url", "http://localhost:8000/v1"),
                    api_key_env=cfg.get("api_key_env", "OPENAI_API_KEY"),
                    max_tokens=cfg.get("max_tokens", 256))

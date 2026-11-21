@@ -13,8 +13,9 @@ agentdojo:
   attacks: [important_instructions]
   calibration_task_frac: 0.5
   defenses: [none, spotlighting_with_delimiting, transformers_pi_detector, wts_output_block, wts_drift_confirm, wts_full]
-  llms:
-    - {model: ots-llama3.1-8b-16k, ollama_base: "llama3.1:8b", num_ctx: 16384, base_url: "http://localhost:11434/v1"}
+  llms:   # num_predict: reply cap (2026-11-21); without it a degenerate reply ran until the 30-min client timeout
+    - {model: ots-llama3.1-8b-16k, ollama_base: "llama3.1:8b", num_ctx: 16384, num_predict: 4096,
+       base_url: "http://localhost:11434/v1"}
 injecagent:
   splits: [dh, ds]
   settings: [base, enhanced]

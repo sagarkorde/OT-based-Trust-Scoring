@@ -126,11 +126,14 @@ def ollama_unload_all(base: str = "http://localhost:11434"):
 
 
 def ensure_ollama_tag(name: str, base: str, num_ctx: int, url: str = "http://localhost:11434",
-                      template_from: str | None = None):
+                      template_from: str | None = None, num_predict: int | None = None):
     """Create the fixed-context Ollama tag `name` from `base` if it does not exist (pulls `base` if needed).
     Uses Ollama's REST API, so configs alone decide which models a run needs.
     template_from: copy the chat template and stop words of this (installed or pullable) Ollama model. For GGUFs
-    pulled from Hugging Face whose metadata carries no chat template (e.g. older Mistral-7B-Instruct-v0.1 GGUFs)."""
+    pulled from Hugging Face whose metadata carries no chat template (e.g. older Mistral-7B-Instruct-v0.1 GGUFs).
+    num_predict: cap on reply length stored in the tag (used when a request sends no max_tokens). Ollama's default
+    is unlimited generation, so a degenerate reply never ends. An existing tag without this cap is re-created in
+    place under the same name (same base, context and template)."""
     import json
     import urllib.request
 
@@ -144,20 +147,29 @@ def ensure_ollama_tag(name: str, base: str, num_ctx: int, url: str = "http://loc
                     raise RuntimeError(f"ollama {path}: {msg['error']}")
     with urllib.request.urlopen(f"{url}/api/tags", timeout=10) as r:
         have = {m["name"] for m in json.loads(r.read())["models"]}
+    def show(model):
+        req = urllib.request.Request(f"{url}/api/show", data=json.dumps({"model": model}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read())
     if name in have or f"{name}:latest" in have:
-        return False
+        if num_predict is None:
+            return False
+        cur = [ln.split() for ln in show(name).get("parameters", "").splitlines()]
+        if any(len(p) >= 2 and p[0] == "num_predict" and p[1] == str(num_predict) for p in cur):
+            return False
+        print(f"[ollama] updating {name}: reply length cap num_predict={num_predict}", flush=True)
     if base not in have:
         print(f"[ollama] pulling {base} ...", flush=True)
         post("/api/pull", {"model": base})
     body = {"model": name, "from": base, "parameters": {"num_ctx": num_ctx, "temperature": 0}}
+    if num_predict is not None:
+        body["parameters"]["num_predict"] = num_predict
     if template_from:
         if template_from not in have:
             print(f"[ollama] pulling {template_from} (for its chat template) ...", flush=True)
             post("/api/pull", {"model": template_from})
-        req = urllib.request.Request(f"{url}/api/show", data=json.dumps({"model": template_from}).encode(),
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            info = json.loads(r.read())
+        info = show(template_from)
         body["template"] = info["template"]
         stops = [ln.split(None, 1)[1].strip().strip('"') for ln in info.get("parameters", "").splitlines()
                  if ln.startswith("stop")]
@@ -165,5 +177,6 @@ def ensure_ollama_tag(name: str, base: str, num_ctx: int, url: str = "http://loc
             body["parameters"]["stop"] = stops
     post("/api/create", body)
     print(f"[ollama] created {name} (from {base}, num_ctx={num_ctx}"
+          + (f", num_predict={num_predict}" if num_predict is not None else "")
           + (f", chat template of {template_from}" if template_from else "") + ")", flush=True)
     return True

@@ -122,4 +122,12 @@ by the authors, unless an API model (e.g. gpt-4o-mini with a key) is used for it
   Still on the CPU: the HarmBench Llama-2-13B classifier (G4/E4 judge; 26 GB in bf16 cannot fit 8 GB, and a
   quantised judge would no longer be the classifier validated in G4) and AgentDojo's DeBERTa PI detector (authors'
   choice 2026-11-20: CPU, same decisions at normal speed; GPU spilled into system memory, see above).
+- Request timeouts (2026-11-21): some AgentDojo runs took exactly ~30 min 11 s per run (e.g. all PI-detector runs of
+  workspace user_task_21): Ollama's default reply length is unlimited, a degenerate reply never ended, the 30-min
+  client timeout fired, and AgentDojo's LocalLLM turned the error into an empty reply (task failed). Fix: the agent
+  model's Ollama tag stores a reply cap `num_predict: 4096` (tool-call replies are a few hundred tokens; vLLM, used
+  by the comparator, also stops generation at the context limit rather than never), and E3 moves logs of runs that
+  hit the timeout to `agentdojo_logs/_retried/` at start-up, reopening the affected blocks (and the WTS blocks
+  replayed from an affected no-defense log) so exactly those runs are redone with the cap. Runs whose replies
+  ended on their own are unaffected.
 

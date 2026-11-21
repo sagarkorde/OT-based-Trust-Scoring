@@ -186,6 +186,58 @@ def _from_config_pi_device(AgentPipeline, pc, device):
         torch.cuda.is_available = orig
 
 
+def _text(m) -> str:
+    c = m.get("content")
+    if isinstance(c, list):
+        return "".join(b.get("content", "") or "" for b in c if isinstance(b, dict))
+    return c or ""
+
+
+def timed_out(d: dict, timeout_s: float = 1800) -> bool:
+    """A finished AgentDojo log whose run lost a reply to the client timeout: AgentDojo's LocalLLM turns a request
+    error into an empty reply, and the run lasted at least the timeout."""
+    return (float(d.get("duration") or 0) >= timeout_s - 10
+            and any(m.get("role") == "assistant" and not _text(m).strip() and not m.get("tool_calls")
+                    for m in d.get("messages", [])))
+
+
+def retry_timed_out(llm_name: str, mshort: str, out: Path, defenses, timeout_s: float = 1800) -> int:
+    """Move logs of runs that hit the client timeout to agentdojo_logs/_retried/ and clear the 'done' markers of
+    every block that used them (for a no-defense log also the WTS blocks replayed from it), so the next pass
+    reruns exactly those runs. Returns the number of logs moved."""
+    import json
+    import shutil
+    moved, blocks = 0, set()
+    for pipe in sorted(LOGDIR.glob(f"{llm_name}-*")):
+        if not pipe.is_dir() or pipe.name.endswith("-check") or "-gate-" in pipe.name:   # gates are closed
+            continue
+        dfn = pipe.name[len(llm_name) + 1:].split("-seed")[0]
+        for f in pipe.glob("*/*/*/*.json"):
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(d.get("utility"), bool) or not timed_out(d, timeout_s):
+                continue
+            tgt = LOGDIR / "_retried" / f.relative_to(LOGDIR)
+            tgt.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(f), str(tgt))
+            moved += 1
+            suite, attack = f.parts[-4], f.parts[-2]
+            blocks.add((dfn, suite, attack))
+            if dfn == "none":            # WTS rows replayed from this log are stale too
+                blocks |= {(w, suite, attack) for w in defenses if w not in DETERMINISTIC}
+    n_markers = 0
+    for dfn, suite, attack in blocks:
+        for m in (out / "done").glob(f"agents_{mshort}_seed*_{suite}_{dfn}_{attack}.ok"):
+            m.unlink()
+            n_markers += 1
+    if moved:
+        print(f"[E3 {mshort}] {moved} run(s) had hit the {timeout_s / 60:.0f}-min request timeout: moved to "
+              f"agentdojo_logs/_retried and rerun ({n_markers} finished block(s) reopened)", flush=True)
+    return moved
+
+
 # ---------------------------------------------------------------------------------------- replay
 def offline_guard_check(guard, enc, dfn: str, messages):
     """Would the WTS elements of `dfn` act anywhere on this no-defense trajectory? Runs the elements' own code on
@@ -377,7 +429,8 @@ def make_llm(lc):
     if lc.get("ollama_base"):
         from wts.hw import ensure_ollama_tag
         ensure_ollama_tag(lc["model"], lc["ollama_base"], lc.get("num_ctx", 16384),
-                          lc["base_url"].replace("/v1", ""), template_from=lc.get("template_from"))
+                          lc["base_url"].replace("/v1", ""), template_from=lc.get("template_from"),
+                          num_predict=lc.get("num_predict"))
     if lc.get("provider") == "openai":
         llm = OpenAILLM(openai.OpenAI(), lc["model"])
         llm.name = lc["model"]
@@ -415,6 +468,7 @@ def _run_agents(cfg, AgentPipeline, PipelineConfig, benchmark_suite_with_injecti
     if replay and "none" not in defenses:
         raise ValueError("agentdojo.replay needs the 'none' defense (it is the replay source)")
     for lc in ac["llms"]:
+        retry_timed_out(make_llm(lc).name, lc["model"].split("/")[-1], out, defenses)
         for seed in cfg["seeds"]:
             llm = make_llm(lc)
             mshort = lc["model"].split("/")[-1]

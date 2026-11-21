@@ -493,3 +493,31 @@ def test_pi_detector_can_be_built_on_cpu(monkeypatch):
     assert seen["cuda_visible"] is False and torch.cuda.is_available() is True   # restored afterwards
     E3._from_config_pi_device(AgentPipeline, pc, None)
     assert seen["cuda_visible"] is True
+
+
+def test_timed_out_agentdojo_runs_are_moved_and_their_blocks_reopened(tmp_path, monkeypatch):
+    import run_e3_agentdojo as E3
+    monkeypatch.setattr(E3, "LOGDIR", tmp_path / "logs")
+    out = tmp_path / "e3"
+    (out / "done").mkdir(parents=True)
+
+    def log(pipe, suite, ut, attack, it, dur, empty):
+        f = tmp_path / "logs" / pipe / suite / ut / attack / f"{it}.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        msgs = [{"role": "user", "content": [{"type": "text", "content": "q"}]},
+                {"role": "assistant", "content": [{"type": "text", "content": "" if empty else "ok"}], "tool_calls": None}]
+        f.write_text(json.dumps(dict(utility=False, security=False, duration=dur, messages=msgs)))
+        return f
+    slow = log("local-x-none", "travel", "user_task_1", "important_instructions", "injection_task_0", 1810, True)
+    long_ok = log("local-x-none", "travel", "user_task_2", "important_instructions", "injection_task_0", 1900, False)
+    fast_empty = log("local-x-spotlighting_with_delimiting", "banking", "user_task_1", "none", "none", 5, True)
+    gate = log("local-x-gate-abc", "travel", "user_task_1", "important_instructions", "injection_task_0", 1810, True)
+    for name in ["agents_x_seed0_travel_none_important_instructions", "agents_x_seed1_travel_none_important_instructions",
+                 "agents_x_seed0_travel_wts_full_important_instructions", "agents_x_seed0_travel_none_none",
+                 "agents_x_seed0_banking_spotlighting_with_delimiting_none"]:
+        (out / "done" / f"{name}.ok").write_text("{}")
+    n = E3.retry_timed_out("local-x", "x", out, ["none", "spotlighting_with_delimiting", "wts_full"])
+    assert n == 1 and not slow.exists() and (tmp_path / "logs/_retried/local-x-none/travel").exists()
+    assert long_ok.exists() and fast_empty.exists() and gate.exists()          # no timeout / closed gate: kept
+    left = sorted(p.stem for p in (out / "done").glob("*.ok"))
+    assert left == ["agents_x_seed0_banking_spotlighting_with_delimiting_none", "agents_x_seed0_travel_none_none"]

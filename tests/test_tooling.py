@@ -78,6 +78,7 @@ def test_ensure_ollama_tag_pulls_and_creates_against_a_fake_server():
     sys.path.insert(0, str(REPO / "src"))
     from wts.hw import ensure_ollama_tag
     calls, tags = [], {"models": [{"name": "llama3.1:8b"}]}
+    shown = {"parameters": 'stop                           "[INST]"\nstop                           "[/INST]"'}
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -92,9 +93,7 @@ def test_ensure_ollama_tag_pulls_and_creates_against_a_fake_server():
             calls.append((self.path, json.loads(self.rfile.read(n))))
             self.send_response(200); self.end_headers()
             if self.path == "/api/show":   # what Ollama returns for mistral:7b-instruct-v0.2
-                self.wfile.write(json.dumps({"template": "[INST] {{ .Prompt }} [/INST]",
-                                             "parameters": 'stop                           "[INST]"\n'
-                                                           'stop                           "[/INST]"'}).encode())
+                self.wfile.write(json.dumps({"template": "[INST] {{ .Prompt }} [/INST]", **shown}).encode())
             else:
                 self.wfile.write(b'{"status":"success"}\n')
 
@@ -116,6 +115,15 @@ def test_ensure_ollama_tag_pulls_and_creates_against_a_fake_server():
     created = calls[-1][1]
     assert created["template"] == "[INST] {{ .Prompt }} [/INST]"
     assert created["parameters"] == {"num_ctx": 8192, "temperature": 0, "stop": ["[INST]", "[/INST]"]}
+    calls.clear()                                       # existing tag without a reply cap: re-created in place
+    assert ensure_ollama_tag("ots-c", "llama3.1:8b", 16384, url, num_predict=4096) is True
+    assert [c[0] for c in calls] == ["/api/show", "/api/create"]
+    assert calls[-1][1]["model"] == "ots-c" and calls[-1][1]["parameters"] == \
+        {"num_ctx": 16384, "temperature": 0, "num_predict": 4096}
+    shown["parameters"] = "num_ctx                        16384\nnum_predict                    4096"
+    calls.clear()                                       # cap already stored: nothing to do
+    assert ensure_ollama_tag("ots-c", "llama3.1:8b", 16384, url, num_predict=4096) is False
+    assert [c[0] for c in calls] == ["/api/show"]
     srv.shutdown()
 
 
