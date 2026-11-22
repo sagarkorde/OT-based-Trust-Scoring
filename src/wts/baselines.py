@@ -123,7 +123,8 @@ class LastTokenProbe:
         for t in texts:
             ids = self._t(t, return_tensors="pt", truncation=True, max_length=1024).input_ids.to(self._m.device)
             with torch.no_grad():
-                hs = self._m(ids, output_hidden_states=True).hidden_states
+                # base model only: same hidden states, no LM head / 128k-vocab logits on the 8 GB GPU
+                hs = getattr(self._m, "model", self._m)(ids, output_hidden_states=True, use_cache=False).hidden_states
             for l in layers:
                 feats[l].append(hs[l][0, -1].float().cpu().numpy())
         return {l: np.stack(v) for l, v in feats.items()}

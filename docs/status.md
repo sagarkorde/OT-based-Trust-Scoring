@@ -146,3 +146,10 @@ wts_drift_confirm 17.0/2.2, wts_full 17.7/2.3, wts_output_block 17.7/2.4.
 NEGATIVE RESULT: the WTS agent guard does not reduce ASR measurably on AgentDojo with Llama-3.1-8B
 (97-100 % of attacked cases unflagged, so replayed unchanged); consistent with AUROC < 0.5 on the GT tool outputs.
 The undefended ASR is already low (2.4 %), which limits headroom for any defense. To be reported prominently.
+
+### E1 Llama layer encoder: VRAM overflow fixed (2026-11-22)
+First run: the second encoding pass (LMSYS reference texts, long) slowed to ~4.5 h estimated and crashed with
+CUBLAS_STATUS_INTERNAL_ERROR. Cause: the full forward computed batch x 1024 x 128k-vocab logits and kept all 33 hidden
+states, overflowing the 8 GB GPU. Fix: stop the forward at block 16 (hook), no LM head. Output values are identical
+(tests/test_llm_layer_encoder.py checks against the full forward). Already cached encodings are kept.
+PIShield probe: features now from the base model without the LM head (same hidden states).

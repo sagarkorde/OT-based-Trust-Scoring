@@ -139,11 +139,37 @@ class LLMLayerEncoder(Encoder):
             enc = tok(texts[i:i + batch_size], padding=True, truncation=True, max_length=self.max_length,
                       return_tensors="pt", add_special_tokens=False).to(self.model.device)
             with torch.no_grad():
-                hs = self.model(**enc, output_hidden_states=True).hidden_states[self.layer]
+                hs = self._layer_output(enc)
             for j in range(hs.shape[0]):
                 Xj = hs[j][enc["attention_mask"][j].bool()]
                 out.append(Xj.float().cpu().numpy())
         return out
+
+    def _layer_output(self, enc):
+        """hidden_states[self.layer] (the output of decoder block self.layer - 1) without running the later blocks,
+        the final norm or the LM head. The full forward also built a batch x length x 128k-vocab logits tensor
+        and kept all 33 hidden states, which overflowed 8 GB of VRAM on long texts (slow spill, then a cuBLAS
+        error). The values are identical: a causal decoder's block k never depends on later blocks."""
+        base = getattr(self.model, "model", self.model)
+        if self.layer == 0 or self.layer >= len(base.layers):   # embeddings / last state (HF applies the final norm)
+            return base(**enc, output_hidden_states=True, use_cache=False).hidden_states[self.layer]
+        captured = {}
+
+        class _Stop(Exception):
+            pass
+
+        def hook(_module, _inp, output):
+            captured["h"] = output[0] if isinstance(output, (tuple, list)) else output
+            raise _Stop
+
+        handle = base.layers[self.layer - 1].register_forward_hook(hook)
+        try:
+            base(**enc, use_cache=False)
+        except _Stop:
+            pass
+        finally:
+            handle.remove()
+        return captured["h"]
 
     def encode_many(self, texts, batch_size: int = 8):
         raw = self.raw_many(texts, batch_size)
