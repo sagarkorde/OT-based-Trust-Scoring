@@ -131,3 +131,8 @@ by the authors, unless an API model (e.g. gpt-4o-mini with a key) is used for it
   replayed from an affected no-defense log) so exactly those runs are redone with the cap. Runs whose replies
   ended on their own are unaffected.
 
+
+### AgentDojo replay determinism check (finished 2026-11-21 22:51)
+From results/e3/done/agentdojo_replay_check_ots-llama3.1-8b-16k.ok: n = 30 re-runs of logged cases;
+same outcome (utility / attack success) in 29/30; identical message trajectory in only 4/30.
+Outcomes are stable under replay; exact wording is not (Ollama temperature-0 nondeterminism). To be reported in the paper.
