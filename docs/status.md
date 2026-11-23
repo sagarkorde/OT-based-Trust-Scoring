@@ -159,4 +159,4 @@ The Llama encoder finished all 5 seeds (15/15 encoder x seed runs). Llama Guard 
 (untruncated) input: the full forward built a length x 128k-vocab logits tensor plus a KV cache. Fix: logits of the
 last position only (logits_to_keep=1, use_cache=False); identical values (tested). Inputs stay untruncated, as for the
 4,544 items already scored (journaled, kept). Because this pass was interrupted, it records no Llama Guard timing row;
-judge latency comes from the latency step instead.
+Llama Guard latency must be measured separately (TODO before the overhead table; not yet implemented).
