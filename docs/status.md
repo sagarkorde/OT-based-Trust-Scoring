@@ -153,3 +153,10 @@ CUBLAS_STATUS_INTERNAL_ERROR. Cause: the full forward computed batch x 1024 x 12
 states, overflowing the 8 GB GPU. Fix: stop the forward at block 16 (hook), no LM head. Output values are identical
 (tests/test_llm_layer_encoder.py checks against the full forward). Already cached encodings are kept.
 PIShield probe: features now from the base model without the LM head (same hidden states).
+
+### E1 Llama Guard baseline: CUDA out of memory at 4544/5463 (2026-11-23)
+The Llama encoder finished all 5 seeds (15/15 encoder x seed runs). Llama Guard then ran out of GPU memory on a long
+(untruncated) input: the full forward built a length x 128k-vocab logits tensor plus a KV cache. Fix: logits of the
+last position only (logits_to_keep=1, use_cache=False); identical values (tested). Inputs stay untruncated, as for the
+4,544 items already scored (journaled, kept). Because this pass was interrupted, it records no Llama Guard timing row;
+judge latency comes from the latency step instead.

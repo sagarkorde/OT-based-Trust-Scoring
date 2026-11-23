@@ -40,3 +40,19 @@ def test_early_exit_matches_full_forward_hidden_state(layer):
     assert len(got) == len(ref)
     for g, r in zip(got, ref):
         np.testing.assert_allclose(g, r, rtol=1e-5, atol=1e-6)
+
+
+def test_last_position_logits_match_full_forward():
+    """LlamaGuardScorer scores from logits_to_keep=1; it must equal the full forward's last-position logits."""
+    torch = pytest.importorskip("torch")
+    transformers = pytest.importorskip("transformers")
+    from wts.baselines import LlamaGuardScorer
+    torch.manual_seed(0)
+    cfg = transformers.LlamaConfig(vocab_size=64, hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                   num_attention_heads=4, num_key_value_heads=2, max_position_embeddings=64)
+    model = transformers.LlamaForCausalLM(cfg).eval()
+    ids = torch.randint(1, 64, (1, 20))
+    g = LlamaGuardScorer(model_name="tiny", device="cpu", _m=model)
+    with torch.no_grad():
+        ref = model(ids).logits[0, -1].float()
+    torch.testing.assert_close(g._last_logits(ids), ref, rtol=1e-5, atol=1e-6)

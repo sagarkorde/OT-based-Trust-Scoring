@@ -65,6 +65,20 @@ class LlamaGuardScorer:
             from .hw import load_causal_lm
             self._m, self._t = load_causal_lm(self.model_name)
 
+    def _last_logits(self, ids):
+        """Logits of the last position only. Same values as the full forward's logits[0, -1], but without the
+        length x 128k-vocab logits tensor and the KV cache, which ran an 8 GB GPU out of memory on long texts."""
+        import torch
+        for attempt in (0, 1):
+            try:
+                with torch.no_grad():
+                    return self._m(ids, logits_to_keep=1, use_cache=False).logits[0, -1].float()
+            except torch.cuda.OutOfMemoryError:
+                if attempt:
+                    raise RuntimeError(f"Llama Guard: out of GPU memory on a {ids.shape[1]}-token input "
+                                       "even after freeing cached memory") from None
+                torch.cuda.empty_cache()
+
     def scores(self, texts) -> np.ndarray:
         import torch
         self._load()
@@ -75,8 +89,7 @@ class LlamaGuardScorer:
             ids = self._t.apply_chat_template([{"role": "user", "content": t}], return_tensors="pt").to(self._m.device)
             # the template ends right before the verdict ("\n\n" + safe/unsafe); score the first verdict token
             ids = torch.cat([ids, self._t("\n\n", add_special_tokens=False, return_tensors="pt").input_ids.to(ids.device)], 1)
-            with torch.no_grad():
-                logits = self._m(ids).logits[0, -1].float()
+            logits = self._last_logits(ids)
             p = torch.softmax(logits[[safe, unsafe]], 0)[1]
             out.append(float(p))
         return np.array(out)
