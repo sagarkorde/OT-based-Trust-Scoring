@@ -160,3 +160,11 @@ The Llama encoder finished all 5 seeds (15/15 encoder x seed runs). Llama Guard 
 last position only (logits_to_keep=1, use_cache=False); identical values (tested). Inputs stay untruncated, as for the
 4,544 items already scored (journaled, kept). Because this pass was interrupted, it records no Llama Guard timing row;
 Llama Guard latency must be measured separately (TODO before the overhead table; not yet implemented).
+
+### E1 complete (2026-11-23 11:58)
+detection.csv: 840 rows = 3 encoders x 5 seeds x 4 families x 14 measures. baselines.csv.gz: 5,463 items, no missing
+values (perplexity, Llama Guard, PIShield probe, known-answer).
+Preliminary (mean AUROC over seeds and families; per-family tables with proper splits to come from the analysis script):
+w2_gauss_adj (the proposed score): BGE 0.762, MiniLM 0.711, Llama-L16 0.701.
+mahalanobis_adj is higher for every encoder: BGE 0.787, MiniLM 0.802, Llama-L16 0.876.
+NEGATIVE RESULT to report: the length-adjusted Mahalanobis comparison beats the proposed W2 score on E1.
