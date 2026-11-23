@@ -178,7 +178,7 @@ def run_gcg(cfg, cfg_e1):
     """Minimal GCG (Zou et al. [6]) with an added W2 term. One behavior at a time, greedy coordinate steps."""
     import torch
 
-    from wts.encoders import LLMLayerEncoder
+    from wts.encoders import LLMLayerEncoder, hidden_at_layer
     from wts.measures_torch import ledoit_wolf_t
 
     gc = cfg["gcg"]
@@ -250,12 +250,12 @@ def run_gcg(cfg, cfg_e1):
                     full = torch.cat([pre.expand(B, -1), beh_ids.expand(B, -1), suffixes, post.expand(B, -1),
                                       tgt_ids.expand(B, -1)], 1)
                     with torch.no_grad():
-                        logits = model(full).logits
-                        t0 = full.shape[1] - len(tgt_ids)
-                        ce = torch.nn.functional.cross_entropy(logits[:, t0 - 1:-1].transpose(1, 2).float(),
+                        # only the positions that predict the target (same values as the full logits[:, t0-1:-1])
+                        logits = model(full, logits_to_keep=len(tgt_ids) + 1, use_cache=False).logits[:, :-1]
+                        ce = torch.nn.functional.cross_entropy(logits.transpose(1, 2).float(),
                                                                tgt_ids.expand(B, -1), reduction="none").mean(1)
                         unit = torch.cat([beh_ids.expand(B, -1), suffixes], 1)
-                        hs = model(unit, output_hidden_states=True).hidden_states[gc["layer"]]
+                        hs = hidden_at_layer(model, gc["layer"], input_ids=unit)
                         w2 = torch.stack([w2_of_hidden(hs[i]) for i in range(B)]).float()
                     return ce + lam * w2, ce, w2
 
@@ -264,11 +264,10 @@ def run_gcg(cfg, cfg_e1):
                     one_hot = torch.nn.functional.one_hot(suf_ids, E.shape[0]).to(E.dtype).requires_grad_(True)
                     s_emb = one_hot @ E
                     full_emb = torch.cat([emb(pre), emb(beh_ids), s_emb, emb(post), emb(tgt_ids)], 0)[None]
-                    logits = model(inputs_embeds=full_emb).logits[0]
-                    t0 = full_emb.shape[1] - len(tgt_ids)
-                    ce = torch.nn.functional.cross_entropy(logits[t0 - 1:-1].float(), tgt_ids)
+                    logits = model(inputs_embeds=full_emb, logits_to_keep=len(tgt_ids) + 1, use_cache=False).logits[0, :-1]
+                    ce = torch.nn.functional.cross_entropy(logits.float(), tgt_ids)
                     unit_emb = torch.cat([emb(beh_ids), s_emb], 0)[None]
-                    hs = model(inputs_embeds=unit_emb, output_hidden_states=True).hidden_states[gc["layer"]][0]
+                    hs = hidden_at_layer(model, gc["layer"], inputs_embeds=unit_emb)[0]
                     loss = ce + lam * w2_of_hidden(hs).float()
                     grad, = torch.autograd.grad(loss, one_hot)
                     top = (-grad).topk(gc["topk"], dim=1).indices

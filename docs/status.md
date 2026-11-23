@@ -168,3 +168,5 @@ Preliminary (mean AUROC over seeds and families; per-family tables with proper s
 w2_gauss_adj (the proposed score): BGE 0.762, MiniLM 0.711, Llama-L16 0.701.
 mahalanobis_adj is higher for every encoder: BGE 0.787, MiniLM 0.802, Llama-L16 0.876.
 NEGATIVE RESULT to report: the length-adjusted Mahalanobis comparison beats the proposed W2 score on E1.
+E4 GCG (before its first run): the same memory savers applied (target-position logits only, early exit at layer 16);
+loss values and suffix gradients identical to the full forward (tests/test_llm_layer_encoder.py).

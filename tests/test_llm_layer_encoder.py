@@ -56,3 +56,36 @@ def test_last_position_logits_match_full_forward():
     with torch.no_grad():
         ref = model(ids).logits[0, -1].float()
     torch.testing.assert_close(g._last_logits(ids), ref, rtol=1e-5, atol=1e-6)
+
+
+def test_gcg_memory_savers_match_full_forward_values_and_gradients():
+    """E4 GCG: target-only logits and early-exit layer states give the same loss and the same suffix gradient."""
+    torch = pytest.importorskip("torch")
+    transformers = pytest.importorskip("transformers")
+    from wts.encoders import hidden_at_layer
+    torch.manual_seed(0)
+    cfg = transformers.LlamaConfig(vocab_size=64, hidden_size=32, intermediate_size=64, num_hidden_layers=4,
+                                   num_attention_heads=4, num_key_value_heads=2, max_position_embeddings=64)
+    model = transformers.LlamaForCausalLM(cfg).eval()
+    for p in model.parameters():
+        p.requires_grad_(False)
+    E = model.get_input_embeddings().weight
+    prefix, suffix, tgt = torch.randint(1, 64, (6,)), torch.randint(1, 64, (5,)), torch.randint(1, 64, (4,))
+
+    def loss(new):
+        one_hot = torch.nn.functional.one_hot(suffix, 64).to(E.dtype).requires_grad_(True)
+        full = torch.cat([E[prefix], one_hot @ E, E[tgt]], 0)[None]
+        unit = torch.cat([E[prefix], one_hot @ E], 0)[None]
+        if new:
+            lg = model(inputs_embeds=full, logits_to_keep=len(tgt) + 1, use_cache=False).logits[0, :-1]
+            hs = hidden_at_layer(model, 2, inputs_embeds=unit)[0]
+        else:
+            t0 = full.shape[1] - len(tgt)
+            lg = model(inputs_embeds=full).logits[0][t0 - 1:-1]
+            hs = model(inputs_embeds=unit, output_hidden_states=True).hidden_states[2][0]
+        val = torch.nn.functional.cross_entropy(lg.float(), tgt) + hs.pow(2).mean()
+        return val, torch.autograd.grad(val, one_hot)[0]
+
+    (v_old, g_old), (v_new, g_new) = loss(False), loss(True)
+    torch.testing.assert_close(v_new, v_old, rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(g_new, g_old, rtol=1e-5, atol=1e-6)

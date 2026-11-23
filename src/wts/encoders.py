@@ -104,6 +104,33 @@ class HFTokenEncoder(Encoder):
         return self.encode_many([text])[0]
 
 
+def hidden_at_layer(model, layer: int, **inputs):
+    """hidden_states[layer] of a HF causal LM (the output of decoder block layer - 1) without running the later
+    blocks, the final norm or the LM head. On an 8 GB GPU the full forward's batch x length x 128k-vocab logits and
+    33 stored hidden states overflowed VRAM. Values are identical (a causal decoder's block k never depends on later
+    blocks) and gradients flow through the result (used by E4's GCG). Accepts input_ids or inputs_embeds."""
+    base = getattr(model, "model", model)
+    if layer == 0 or layer >= len(base.layers):   # embeddings / last state (HF applies the final norm there)
+        return base(**inputs, output_hidden_states=True, use_cache=False).hidden_states[layer]
+    captured = {}
+
+    class _Stop(Exception):
+        pass
+
+    def hook(_module, _inp, output):
+        captured["h"] = output[0] if isinstance(output, (tuple, list)) else output
+        raise _Stop
+
+    handle = base.layers[layer - 1].register_forward_hook(hook)
+    try:
+        base(**inputs, use_cache=False)
+    except _Stop:
+        pass
+    finally:
+        handle.remove()
+    return captured["h"]
+
+
 # --------------------------------------------------------------------------------------------------
 @dataclass
 class LLMLayerEncoder(Encoder):
@@ -146,30 +173,7 @@ class LLMLayerEncoder(Encoder):
         return out
 
     def _layer_output(self, enc):
-        """hidden_states[self.layer] (the output of decoder block self.layer - 1) without running the later blocks,
-        the final norm or the LM head. The full forward also built a batch x length x 128k-vocab logits tensor
-        and kept all 33 hidden states, which overflowed 8 GB of VRAM on long texts (slow spill, then a cuBLAS
-        error). The values are identical: a causal decoder's block k never depends on later blocks."""
-        base = getattr(self.model, "model", self.model)
-        if self.layer == 0 or self.layer >= len(base.layers):   # embeddings / last state (HF applies the final norm)
-            return base(**enc, output_hidden_states=True, use_cache=False).hidden_states[self.layer]
-        captured = {}
-
-        class _Stop(Exception):
-            pass
-
-        def hook(_module, _inp, output):
-            captured["h"] = output[0] if isinstance(output, (tuple, list)) else output
-            raise _Stop
-
-        handle = base.layers[self.layer - 1].register_forward_hook(hook)
-        try:
-            base(**enc, use_cache=False)
-        except _Stop:
-            pass
-        finally:
-            handle.remove()
-        return captured["h"]
+        return hidden_at_layer(self.model, self.layer, **enc)
 
     def encode_many(self, texts, batch_size: int = 8):
         raw = self.raw_many(texts, batch_size)
