@@ -170,3 +170,9 @@ mahalanobis_adj is higher for every encoder: BGE 0.787, MiniLM 0.802, Llama-L16 
 NEGATIVE RESULT to report: the length-adjusted Mahalanobis comparison beats the proposed W2 score on E1.
 E4 GCG (before its first run): the same memory savers applied (target-position logits only, early exit at layer 16);
 loss values and suffix gradients identical to the full forward (tests/test_llm_layer_encoder.py).
+
+### E4 GCG complete (2026-11-24)
+results/e4/gcg_wts.csv: 30 rows (seed 0, 15 behaviors x lambda {0, 1}).
+Flagged by the WTS prompt check: 0/15 at lambda 0 and 0/15 at lambda 1. Jailbroken (HarmBench judge): 1/15 at
+lambda 0, 5/15 at lambda 1. NEGATIVE RESULT: the prompt-level WTS check flags none of the GCG prompts, even
+without the WTS-aware term. Small n (15 per arm): no claim about the lambda difference without a test.
