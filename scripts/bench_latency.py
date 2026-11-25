@@ -4,7 +4,10 @@ H6 is evaluated on the GPU machine:  python scripts/bench_latency.py --device cu
 On a CPU-only dev machine use --out results/_smoke/e5_cpu.csv: those numbers are NOT the H6 result.
 
 Synthetic token clouds are used on purpose: latency depends on (n_tokens, d), not on content.
-The LLM-judge comparison row (Llama Guard 3 8B) is timed by run_e1_detection.py on real prompts.
+The LLM-judge comparison row (Llama Guard 3 8B) is timed here on real E1 prompts (--judge): per item, with a CUDA
+sync, after 5 warm-up items, so median and p95 are true per-item figures. (run_e1_detection.py only writes a mean
+judge row when its Llama Guard pass ran uninterrupted, which on the laptop it did not.)
+Re-running skips the parts whose rows are already in --out.
 """
 from __future__ import annotations
 
@@ -50,6 +53,37 @@ def time_torch(ref, units, device):
     return np.array(ts)
 
 
+def time_judge(model_name, cfg_path, n, seed):
+    """Per-item Llama Guard 3 latency on n E1 prompts drawn at random (all families), same scorer as E1."""
+    import random
+
+    import torch
+    import yaml
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import run_e1_detection as E1
+    from wts.baselines import LlamaGuardScorer
+    alpaca, lmsys, attacks, _ = E1.load_items(yaml.safe_load(open(cfg_path)))
+    items = random.Random(seed).sample(alpaca + lmsys + attacks, n + 5)
+    g = LlamaGuardScorer(model_name)
+    ts = []
+    for i, r in enumerate(items):
+        torch.cuda.synchronize()
+        t = time.perf_counter()
+        g.scores([r["text"]])
+        torch.cuda.synchronize()
+        if i >= 5:   # warm-up excluded
+            ts.append((time.perf_counter() - t) * 1000)
+        if (i + 1) % 50 == 0:
+            print(f"[latency] Llama Guard {i + 1}/{len(items)} items timed", flush=True)
+    return np.array(ts)
+
+
+def _existing(out):
+    import pandas as pd
+    p = Path(out)
+    return pd.read_csv(p) if p.exists() else None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", default="cpu")
@@ -59,12 +93,23 @@ def main():
     ap.add_argument("--measures", default="w2_gauss,w2_sliced,mahalanobis,cosine,mmd_rbf")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--judge", default="", help="HF id of the LLM judge to time on real prompts (needs --e1-config)")
+    ap.add_argument("--e1-config", default="")
+    ap.add_argument("--judge-n", type=int, default=300)
     a = ap.parse_args()
+    have = _existing(a.out)
+    synth_done = have is not None and (have.device.astype(str) == "cpu-numpy").any() and \
+        (a.device == "cpu" or (have.device.astype(str) == a.device).any())
+    judge_measure = f"judge:{a.judge.split('/')[-1].lower().replace('-', '_')}"
+    judge_done = have is not None and ((have.measure.astype(str) == judge_measure) &
+                                       (have.device.astype(str) == "cuda-per-item")).any()
     rng = np.random.default_rng(a.seed)
     cfg = vars(a)
     with run_record("e5", cfg, a.seed) as rec:
         rows = []
-        for d in map(int, a.dims.split(",")):
+        if synth_done:
+            print(f"[latency] synthetic score timings already in {a.out}, skipping", flush=True)
+        for d in (map(int, a.dims.split(",")) if not synth_done else []):
             ref_units = [rng.standard_normal((rng.poisson(a.tokens) + 2, d)) for _ in range(300)]
             units = [rng.standard_normal((rng.poisson(a.tokens) + 2, d)) for _ in range(a.n_units)]
             ref = ReferenceModel(seed=a.seed).fit(ref_units)
@@ -78,7 +123,17 @@ def main():
                 rows.append(dict(device=a.device, dim=d, measure="w2_gauss", n_units=len(ts),
                                  median_ms=round(float(np.median(ts)), 3), p95_ms=round(float(np.quantile(ts, .95)), 3)))
                 print(rows[-1], flush=True)
-        append_rows(a.out, rows)
+        if rows:
+            append_rows(a.out, rows)
+        if a.judge and judge_done:
+            print(f"[latency] {judge_measure} already timed, skipping", flush=True)
+        elif a.judge:
+            ts = time_judge(a.judge, a.e1_config, a.judge_n, a.seed)
+            jrow = dict(device="cuda-per-item", dim="", measure=judge_measure, n_units=len(ts),
+                        median_ms=round(float(np.median(ts)), 3), p95_ms=round(float(np.quantile(ts, .95)), 3))
+            print(jrow, flush=True)
+            append_rows(a.out, [jrow])
+            rows.append(jrow)
         rec["rows"] = rows
 
 

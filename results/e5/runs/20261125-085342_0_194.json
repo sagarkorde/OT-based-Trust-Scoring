@@ -1,0 +1,38 @@
+{
+  "exp": "e5",
+  "seed": 0,
+  "config": {
+    "device": "cpu",
+    "dims": "32",
+    "n_units": 20,
+    "tokens": 8,
+    "measures": "w2_gauss,w2_sliced,mahalanobis,cosine,mmd_rbf",
+    "seed": 0,
+    "out": "/tmp/lat.csv",
+    "judge": "",
+    "e1_config": "",
+    "judge_n": 300
+  },
+  "git_commit": "a7d75bf118f1139e50328d4b98a4561ea5f86aa8-dirty",
+  "versions": {
+    "python": "3.13.18",
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "sklearn": "1.9.1",
+    "ot": "0.9.7.post1",
+    "torch": "2.15.0+cu132",
+    "transformers": "4.57.6"
+  },
+  "hardware": {
+    "OT_QUANT": null,
+    "OT_JUDGE_DEVICE": null,
+    "OT_MAX_RAM_GB": null,
+    "OT_PROFILE": null
+  },
+  "host": "vm",
+  "started": "2026-11-25T08:53:42+0000",
+  "status": "ok",
+  "rows": [],
+  "wall_seconds": 0.0,
+  "peak_rss_gib": null
+}

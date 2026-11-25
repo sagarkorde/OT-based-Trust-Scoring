@@ -86,7 +86,8 @@ def main():
         run(s("smoke.py"), env, log)
     elif t == "latency":
         dev = "cuda"
-        run(s("bench_latency.py", "--device", dev, "--out", "results/e5_overhead.csv"), env, log)
+        run(s("bench_latency.py", "--device", dev, "--out", "results/e5_overhead.csv",
+              "--judge", "meta-llama/Llama-Guard-3-8B", "--e1-config", f"{C}/e1.yaml"), env, log)
     elif t == "gates":
         run(s("run_gates.py", "--config", f"{C}/gates.yaml", *(["--only", *a.only] if a.only else [])), env, log)
     elif t == "g2-diagnose":       # reads the saved G2 trajectories; no model calls

@@ -176,3 +176,10 @@ results/e4/gcg_wts.csv: 30 rows (seed 0, 15 behaviors x lambda {0, 1}).
 Flagged by the WTS prompt check: 0/15 at lambda 0 and 0/15 at lambda 1. Jailbroken (HarmBench judge): 1/15 at
 lambda 0, 5/15 at lambda 1. NEGATIVE RESULT: the prompt-level WTS check flags none of the GCG prompts, even
 without the WTS-aware term. Small n (15 per arm): no claim about the lambda difference without a test.
+
+### E4 complete (2026-11-25 14:18)
+All parts done: dilution, paraphrase, GCG, RAG (E2 with E4 attacks), agents (AgentDojo 'direct').
+Dilution: 0/1500 attack prompts flagged before dilution in every seed (log line "0/1500 flagged undiluted"), so the
+dilution evasion study has nothing to evade: report it as uninformative, together with the reason.
+Latency step: now also times Llama Guard 3 per item on 300 random E1 prompts (CUDA sync, 5 warm-up items excluded),
+device label "cuda-per-item"; replaces the missing E1 judge row.
