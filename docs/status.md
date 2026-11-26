@@ -183,3 +183,12 @@ Dilution: 0/1500 attack prompts flagged before dilution in every seed (log line 
 dilution evasion study has nothing to evade: report it as uninformative, together with the reason.
 Latency step: now also times Llama Guard 3 per item on 300 random E1 prompts (CUDA sync, 5 warm-up items excluded),
 device label "cuda-per-item"; replaces the missing E1 judge row.
+
+### Latency / H6 (laptop RTX 4060, 2026-11-26)
+results/e5_overhead.csv. Gaussian W2 at d = 768: GPU median 29.6 ms (p95 30.3); CPU 170.0 ms. At d = 384: GPU 12.5 ms.
+Llama Guard 3 8B (4-bit), per item on 300 real E1 prompts: median 231.9 ms, p95 697.3 ms.
+H6 (frozen: < 20 ms at d = 768 AND >= 10x cheaper than an 8B judge): NOT SUPPORTED on this hardware
+(29.6 ms; judge/W2 = 7.8x). Note for the paper: the judge is 4-bit quantized and the GPU is a laptop RTX 4060;
+other measures are much cheaper on CPU (Mahalanobis 0.31 ms, cosine 0.07 ms at d = 768).
+Housekeeping: removed two run logs (results/e5/runs/20261125-0853*.json) that came from a CPU test of the latency
+script in the development sandbox (output /tmp/lat.csv), committed by mistake; they were never results.
